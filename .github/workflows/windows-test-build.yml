@@ -21,18 +21,20 @@ jobs:
       - name: Run Windows GUI test
         run: python -m pytest tests/test_gui.py -q
       - name: Build single Windows EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name "熱血少年照片整理助手" app.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name "RexuePhotoAssistant" app.py
       - name: Smoke-test EXE startup
-        shell: powershell
+        shell: pwsh
         run: |
-          $exe = Resolve-Path "dist/熱血少年照片整理助手.exe"
+          $exe = Resolve-Path "dist/RexuePhotoAssistant.exe"
           $process = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 5
           if ($process.HasExited) { throw "EXE closed unexpectedly with code $($process.ExitCode)" }
           Stop-Process -Id $process.Id -Force
       - name: Package tested desktop app
-        shell: powershell
-        run: Compress-Archive -Path "dist/熱血少年照片整理助手.exe" -DestinationPath "熱血少年照片整理助手_Windows測試版.zip"
+        shell: pwsh
+        run: |
+          Rename-Item "dist/RexuePhotoAssistant.exe" "熱血少年照片整理助手.exe"
+          Compress-Archive -Path "dist/熱血少年照片整理助手.exe" -DestinationPath "熱血少年照片整理助手_Windows測試版.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: rexue-photo-assistant-windows
