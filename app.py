@@ -72,7 +72,27 @@ def parse_date(value: str) -> datetime:
 
 
 def parse_start(day: datetime, value: str) -> datetime:
-    digits = re.sub(r"\D", "", str(value))
+    text = str(value).strip()
+    try:
+        numeric = float(text)
+        # Native Excel time values are fractions of one day.
+        if 0 <= numeric < 1:
+            total_minutes = int(round(numeric * 24 * 60)) % (24 * 60)
+            return day.replace(hour=total_minutes // 60, minute=total_minutes % 60)
+        # XLSX/CSV may expose a typed value such as 920.0 for 09:20.
+        if numeric.is_integer():
+            text = str(int(numeric))
+    except ValueError:
+        pass
+    colon = re.fullmatch(r"(\d{1,2}):([0-5]\d)(?::[0-5]\d)?", text)
+    if colon:
+        hour, minute = int(colon.group(1)), int(colon.group(2))
+        if hour > 23:
+            raise ValueError(f"無法辨識時間：{value}")
+        return day.replace(hour=hour, minute=minute)
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        raise ValueError(f"無法辨識時間：{value}")
     if len(digits) <= 2:
         hour, minute = int(digits), 0
     elif len(digits) == 3:
