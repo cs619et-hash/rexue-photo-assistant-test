@@ -69,6 +69,17 @@ def test_google_sheet_is_kept_inside_app_without_showing_file_path():
     app.destroy()
 
 
+def test_browser_download_message_does_not_claim_login_is_required(monkeypatch, tmp_path):
+    app = App()
+    app.withdraw()
+    monkeypatch.setattr("app.webbrowser.open", lambda url: True)
+    monkeypatch.setattr("app.threading.Thread.start", lambda self: None)
+    monkeypatch.setattr("app.Path.home", lambda: tmp_path)
+    app._open_google_in_browser("https://docs.google.com/spreadsheets/d/abc123/edit")
+    assert app.status.get() == "已開啟瀏覽器下載預約表，下載完成後會自動帶入程式，請勿關閉程式。"
+    app.destroy()
+
+
 def test_csv_flow_creates_folder_and_sorts_photo(tmp_path: Path):
     app = App()
     app.withdraw()
