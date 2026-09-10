@@ -405,6 +405,9 @@ class App(tk.Tk):
         self.zhixian_var = tk.BooleanVar(value=True)
         self.zhicheng_var = tk.BooleanVar(value=True)
         self.photographer_buttons: dict[str, tk.Button] = {}
+        self.sort_running = False
+        self.stop_sort_event = threading.Event()
+        self.progress_var = tk.DoubleVar(value=0)
         self._configure_style()
         self._build()
 
@@ -426,6 +429,9 @@ class App(tk.Tk):
         style.map("Action.TButton", background=[("active", "#EA580C"), ("pressed", "#C2410C")])
         style.configure("Secondary.TButton", background="#374151", foreground="#F9FAFB", padding=(11, 7), font=("Microsoft JhengHei UI", 10), borderwidth=0)
         style.map("Secondary.TButton", background=[("active", "#4B5563")])
+        style.configure("Stop.TButton", background="#DC2626", foreground="#FFFFFF", padding=(13, 8), font=("Microsoft JhengHei UI", 10, "bold"), borderwidth=0)
+        style.map("Stop.TButton", background=[("active", "#B91C1C"), ("pressed", "#991B1B")])
+        style.configure("Orange.Horizontal.TProgressbar", troughcolor="#273449", background="#F97316", lightcolor="#F97316", darkcolor="#F97316", borderwidth=0)
         style.configure("Treeview", background="#F8FAFC", fieldbackground="#F8FAFC", foreground="#111827", rowheight=29, borderwidth=0, font=("Microsoft JhengHei UI", 9))
         style.configure("Treeview.Heading", background="#273449", foreground="#FFFFFF", padding=8, font=("Microsoft JhengHei UI", 9, "bold"), relief="flat")
         style.map("Treeview", background=[("selected", "#F97316")], foreground=[("selected", "#FFFFFF")])
@@ -468,9 +474,14 @@ class App(tk.Tk):
 
         buttons = ttk.Frame(self, style="App.TFrame", padding=(18, 14, 18, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="1  讀取預約表", style="Secondary.TButton", command=self.load_schedule).pack(side="left")
-        ttk.Button(buttons, text="2  建立資料夾", style="Secondary.TButton", command=self.create_folders).pack(side="left", padx=8)
-        ttk.Button(buttons, text="3  自動分類照片", style="Action.TButton", command=self.start_sort).pack(side="left")
+        self.read_button = ttk.Button(buttons, text="1  讀取預約表", style="Secondary.TButton", command=self.load_schedule)
+        self.read_button.pack(side="left")
+        self.folder_button = ttk.Button(buttons, text="2  建立資料夾", style="Secondary.TButton", command=self.create_folders)
+        self.folder_button.pack(side="left", padx=8)
+        self.sort_button = ttk.Button(buttons, text="3  自動分類照片", style="Action.TButton", command=self.start_sort)
+        self.sort_button.pack(side="left")
+        self.progress = ttk.Progressbar(buttons, variable=self.progress_var, maximum=100, length=260, style="Orange.Horizontal.TProgressbar")
+        self.progress.pack(side="left", padx=(16, 0), fill="x", expand=True)
 
         columns = ("photographer", "date", "time", "venue", "group", "matchup", "folder", "status")
         self.tree = ttk.Treeview(self, columns=columns, show="headings")
@@ -697,6 +708,8 @@ class App(tk.Tk):
         self.status.set(f"已建立 {len(selected)} 個場次資料夾。")
 
     def start_sort(self):
+        if self.sort_running:
+            return
         if not self.matches:
             self.load_schedule()
             if not self.matches:
@@ -713,7 +726,33 @@ class App(tk.Tk):
             return
         if self.mode_var.get() == "move" and not messagebox.askyesno("確認移動", "移動後原資料夾不會保留照片。確定要繼續嗎？"):
             return
+        self.sort_running = True
+        self.stop_sort_event.clear()
+        self.progress_var.set(0)
+        self.sort_button.configure(text="■  停止分類", style="Stop.TButton", command=self.stop_sort)
+        self.read_button.state(["disabled"])
+        self.folder_button.state(["disabled"])
+        self.status.set("正在掃描照片，請稍候…")
         threading.Thread(target=self.sort_all_photographers, daemon=True).start()
+
+    def stop_sort(self):
+        if not self.sort_running:
+            return
+        self.stop_sort_event.set()
+        self.sort_button.state(["disabled"])
+        self.status.set("正在安全停止；完成目前處理中的照片後就會停止…")
+
+    def finish_sort_ui(self):
+        self.sort_running = False
+        self.sort_button.state(["!disabled"])
+        self.sort_button.configure(text="3  自動分類照片", style="Action.TButton", command=self.start_sort)
+        self.read_button.state(["!disabled"])
+        self.folder_button.state(["!disabled"])
+
+    def update_sort_progress(self, completed, total):
+        percent = (completed / total * 100) if total else 0
+        self.progress_var.set(percent)
+        self.status.set(f"正在處理照片：{completed}／{total} 張（{percent:.0f}%）")
 
     def sort_all_photographers(self):
         try:
@@ -725,10 +764,16 @@ class App(tk.Tk):
             source = Path(self.photo_var.get()).resolve()
             done, review = self.sort_selected(source, output, event)
             grand_sorted, grand_review = done, review
-            self.after(0, self.status.set, f"完成：自動分類 {grand_sorted} 張，待確認 {grand_review} 張。")
-            self.after(0, messagebox.showinfo, "分類完成", f"自動分類：{grand_sorted} 張\n待確認：{grand_review} 張")
+            if self.stop_sort_event.is_set():
+                self.after(0, self.status.set, f"已停止：本次已處理完成的照片會保留；再次開始會跳過已完成檔案。")
+            else:
+                self.after(0, self.progress_var.set, 100)
+                self.after(0, self.status.set, f"完成：自動分類 {grand_sorted} 張，待確認 {grand_review} 張。")
+                self.after(0, messagebox.showinfo, "分類完成", f"自動分類：{grand_sorted} 張\n待確認：{grand_review} 張")
         except Exception as exc:
             self.after(0, messagebox.showerror, "分類失敗", str(exc))
+        finally:
+            self.after(0, self.finish_sort_ui)
 
     def sort_selected(self, source, output, event):
             names = self.selected_names()
@@ -759,8 +804,16 @@ class App(tk.Tk):
             jobs: list[tuple[Path, Path]] = []
             reserved: set[Path] = set()
 
-            def reserve_destination(target_dir, filename):
+            def reserve_destination(source_path, target_dir, filename):
                 candidate = target_dir / filename
+                if candidate.exists():
+                    try:
+                        same_size = candidate.stat().st_size == source_path.stat().st_size
+                        same_time = abs(candidate.stat().st_mtime - source_path.stat().st_mtime) < 2
+                        if same_size and same_time:
+                            return None
+                    except OSError:
+                        pass
                 counter = 2
                 while candidate.exists() or candidate in reserved:
                     candidate = target_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
@@ -785,11 +838,14 @@ class App(tk.Tk):
                     target_dir = output / "待確認_同時段或無法判斷"
                     review_count += 1
                 target_dir.mkdir(parents=True, exist_ok=True)
-                jobs.append((photo, reserve_destination(target_dir, photo.name)))
+                destination = reserve_destination(photo, target_dir, photo.name)
+                if destination is not None:
+                    jobs.append((photo, destination))
 
-            total = len(jobs)
-            completed = 0
+            total = len(files)
+            completed = total - len(jobs)
             transfer_mode = self.mode_var.get()
+            self.after(0, self.update_sort_progress, completed, total)
 
             def transfer(job):
                 photo, destination = job
@@ -800,14 +856,18 @@ class App(tk.Tk):
 
             # A small worker pool materially improves SSD/card-reader copying,
             # while avoiding the slowdown caused by excessive parallel I/O.
-            workers = min(4, total)
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(transfer, job) for job in jobs]
-                for future in as_completed(futures):
-                    future.result()
-                    completed += 1
-                    if completed == total or completed % 20 == 0:
-                        self.after(0, self.status.set, f"正在處理照片：{completed}／{total} 張…")
+            workers = min(4, len(jobs))
+            if workers:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    for offset in range(0, len(jobs), workers):
+                        if self.stop_sort_event.is_set():
+                            break
+                        batch = jobs[offset:offset + workers]
+                        futures = [executor.submit(transfer, job) for job in batch]
+                        for future in as_completed(futures):
+                            future.result()
+                            completed += 1
+                        self.after(0, self.update_sort_progress, completed, total)
             return sorted_count, review_count
 
 
