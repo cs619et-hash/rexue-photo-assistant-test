@@ -388,6 +388,7 @@ class App(tk.Tk):
         self.mode_var = tk.StringVar(value="copy")
         self.zhixian_var = tk.BooleanVar(value=True)
         self.zhicheng_var = tk.BooleanVar(value=True)
+        self.photographer_buttons: dict[str, tk.Button] = {}
         self._configure_style()
         self._build()
 
@@ -432,10 +433,21 @@ class App(tk.Tk):
         ttk.Radiobutton(top, text="複製照片（推薦）", variable=self.mode_var, value="copy").grid(row=4, column=2, sticky="w")
         ttk.Radiobutton(top, text="移動照片", variable=self.mode_var, value="move").grid(row=4, column=3, sticky="w")
         ttk.Label(top, text="攝影師", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=6)
-        photographer_box = ttk.Frame(top)
+        photographer_box = ttk.Frame(top, style="Card.TFrame")
         photographer_box.grid(row=5, column=1, columnspan=3, sticky="w", padx=8)
-        ttk.Checkbutton(photographer_box, text="植先（黃色）", variable=self.zhixian_var, command=self.photographer_changed).pack(side="left")
-        ttk.Checkbutton(photographer_box, text="植丞（藍色）", variable=self.zhicheng_var, command=self.photographer_changed).pack(side="left", padx=(16, 0))
+        self.photographer_buttons["植先"] = tk.Button(
+            photographer_box, command=lambda: self.toggle_photographer("植先"),
+            font=("Microsoft JhengHei UI", 10, "bold"), relief="flat", bd=0,
+            padx=16, pady=7, cursor="hand2", takefocus=False,
+        )
+        self.photographer_buttons["植先"].pack(side="left")
+        self.photographer_buttons["植丞"] = tk.Button(
+            photographer_box, command=lambda: self.toggle_photographer("植丞"),
+            font=("Microsoft JhengHei UI", 10, "bold"), relief="flat", bd=0,
+            padx=16, pady=7, cursor="hand2", takefocus=False,
+        )
+        self.photographer_buttons["植丞"].pack(side="left", padx=(10, 0))
+        self.update_photographer_buttons()
         top.columnconfigure(1, weight=1)
 
         buttons = ttk.Frame(self, style="App.TFrame", padding=(18, 14, 18, 12))
@@ -528,6 +540,29 @@ class App(tk.Tk):
             self.render_matches()
         else:
             self.status.set(f"目前攝影師：{names}。讀取預約表後會顯示對應顏色的場次。")
+
+    def toggle_photographer(self, name):
+        variable = self.zhixian_var if name == "植先" else self.zhicheng_var
+        variable.set(not variable.get())
+        self.update_photographer_buttons()
+        self.photographer_changed()
+
+    def update_photographer_buttons(self):
+        states = {
+            "植先": (self.zhixian_var.get(), "#FACC15", "#422006", "黃色"),
+            "植丞": (self.zhicheng_var.get(), "#3B82F6", "#FFFFFF", "藍色"),
+        }
+        for name, (selected, active_bg, active_fg, color_name) in states.items():
+            button = self.photographer_buttons.get(name)
+            if not button:
+                continue
+            button.configure(
+                text=f"✓  {name}（{color_name}）" if selected else f"　 {name}（{color_name}）",
+                bg=active_bg if selected else "#374151",
+                fg=active_fg if selected else "#CBD5E1",
+                activebackground=active_bg if selected else "#4B5563",
+                activeforeground=active_fg if selected else "#FFFFFF",
+            )
 
     def show_rows(self, rows, fills=None):
         self.matches = parse_matches(rows, fills)
