@@ -22,6 +22,20 @@ def test_gui_opens_and_checkboxes_respond():
     app.destroy()
 
 
+def test_photographer_uses_clear_button_selection_without_native_checkbox():
+    app = App()
+    app.withdraw()
+    assert app.photographer_buttons["植先"].cget("text").startswith("✓")
+    assert app.photographer_buttons["植丞"].cget("text").startswith("✓")
+    app.toggle_photographer("植丞")
+    assert app.zhicheng_var.get() is False
+    assert "✓" not in app.photographer_buttons["植丞"].cget("text")
+    app.toggle_photographer("植丞")
+    assert app.zhicheng_var.get() is True
+    assert app.photographer_buttons["植丞"].cget("text").startswith("✓")
+    app.destroy()
+
+
 def test_csv_without_colours_uses_only_checked_photographer():
     app = App()
     app.withdraw()
