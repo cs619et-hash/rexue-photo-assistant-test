@@ -76,7 +76,7 @@ def test_browser_download_message_does_not_claim_login_is_required(monkeypatch, 
     monkeypatch.setattr("app.threading.Thread.start", lambda self: None)
     monkeypatch.setattr("app.Path.home", lambda: tmp_path)
     app._open_google_in_browser("https://docs.google.com/spreadsheets/d/abc123/edit")
-    assert app.status.get() == "已開啟瀏覽器下載預約表，下載完成後會自動帶入程式，請勿關閉程式。"
+    assert app.status.get() == "已開啟瀏覽器下載預約表；下載完成後會自動帶入，請勿關閉程式。"
     app.destroy()
 
 
