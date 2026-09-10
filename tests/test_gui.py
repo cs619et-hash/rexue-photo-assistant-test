@@ -122,3 +122,28 @@ def test_csv_flow_creates_folder_and_sorts_photo(tmp_path: Path):
     assert (sorted_count, review_count) == (1, 0)
     assert (folder / "DSC0001.JPG").read_bytes() == b"test-photo"
     app.destroy()
+
+
+def test_source_and_output_can_be_the_same_folder(tmp_path: Path):
+    app = App()
+    app.withdraw()
+    rows = [
+        ["比賽日期", "比賽開始時間", "比賽地點", "年級組別", "隊伍名稱/球員姓名/背號", "比賽隊伍名稱"],
+        ["2026年09月12日", "0800", "甲", "U10", "大將", "安東國小"],
+    ]
+    shared = tmp_path / "照片與輸出"
+    shared.mkdir()
+    photo = shared / "DSC0002.ARW"
+    photo.write_bytes(b"raw-photo")
+    timestamp = datetime(2026, 9, 12, 8, 20).timestamp()
+    os.utime(photo, (timestamp, timestamp))
+    app.zhixian_var.set(True)
+    app.zhicheng_var.set(False)
+    app.event_var.set("測試盃")
+    app.show_rows(rows, {})
+    folder = shared / "2026.09.12-測試盃-U10 大將 vs 安東國小"
+    folder.mkdir()
+    sorted_count, review_count = app.sort_selected(shared, shared, "測試盃")
+    assert (sorted_count, review_count) == (1, 0)
+    assert (folder / "DSC0002.ARW").read_bytes() == b"raw-photo"
+    app.destroy()
