@@ -10,6 +10,7 @@ def test_gui_opens_and_checkboxes_respond():
     app = App()
     app.withdraw()
     app.update_idletasks()
+    assert app.event_var.get() == ""
     app.zhixian_var.set(True)
     app.zhicheng_var.set(False)
     app.photographer_changed()
