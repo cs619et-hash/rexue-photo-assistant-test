@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "熱血少年｜賽事照片整理助手"
@@ -297,7 +297,10 @@ class App(tk.Tk):
         top = ttk.Frame(self, padding=14)
         top.pack(fill="x")
         ttk.Label(top, text=APP_NAME, font=("Microsoft JhengHei UI", 18, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
-        self._row(top, 1, "預約表", self.source_var, self.pick_sheet, "選擇 CSV/XLSX")
+        ttk.Label(top, text="預約表").grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Entry(top, textvariable=self.source_var).grid(row=1, column=1, sticky="ew", padx=8)
+        ttk.Button(top, text="貼 Google 網址／自動下載", command=self.ask_google_url).grid(row=1, column=2, sticky="ew", padx=(0, 6))
+        ttk.Button(top, text="選擇 CSV/XLSX", command=self.pick_sheet).grid(row=1, column=3, sticky="ew")
         self._row(top, 2, "照片來源", self.photo_var, lambda: self.pick_dir(self.photo_var), "選擇資料夾")
         self._row(top, 3, "輸出位置", self.output_var, lambda: self.pick_dir(self.output_var), "選擇資料夾")
         ttk.Label(top, text="賽事名稱").grid(row=4, column=0, sticky="w", pady=6)
@@ -314,7 +317,6 @@ class App(tk.Tk):
         buttons = ttk.Frame(self, padding=(14, 0, 14, 8))
         buttons.pack(fill="x")
         ttk.Button(buttons, text="① 讀取預約表", command=self.load_schedule).pack(side="left")
-        ttk.Button(buttons, text="Google登入下載", command=self.google_browser_download).pack(side="left", padx=(8, 0))
         ttk.Button(buttons, text="② 建立資料夾", command=self.create_folders).pack(side="left", padx=8)
         ttk.Button(buttons, text="③ 自動分類照片", command=self.start_sort).pack(side="left")
 
@@ -339,6 +341,19 @@ class App(tk.Tk):
         if path:
             self.source_var.set(path)
 
+    def ask_google_url(self):
+        current = self.source_var.get().strip()
+        initial = current if current.lower().startswith("http") else ""
+        url = simpledialog.askstring(
+            "Google 預約表網址",
+            "請貼上 Google 試算表的完整網址：",
+            initialvalue=initial,
+            parent=self,
+        )
+        if url:
+            self.source_var.set(url.strip())
+            self.google_browser_download()
+
     def pick_dir(self, variable):
         path = filedialog.askdirectory()
         if path:
@@ -361,9 +376,18 @@ class App(tk.Tk):
         if self.zhicheng_var.get(): names.add("植丞")
         return names
 
+    def effective_photographer(self, match):
+        """CSV has no cell colours; one checked photographer is an unambiguous fallback."""
+        if match.photographer != "待確認":
+            return match.photographer
+        names = self.selected_names()
+        return next(iter(names)) if len(names) == 1 else "待確認"
+
     def filtered_matches(self):
         names = self.selected_names()
-        return [m for m in self.matches if m.photographer in names]
+        if not names:
+            return []
+        return [m for m in self.matches if m.photographer in names or m.photographer == "待確認"]
 
     def refresh_view(self):
         if self.matches:
@@ -388,13 +412,15 @@ class App(tk.Tk):
         counts: dict[datetime, int] = {}
         visible = self.filtered_matches()
         for match in visible:
-            key = (match.photographer, match.start)
+            key = (self.effective_photographer(match), match.start)
             counts[key] = counts.get(key, 0) + 1
         for match in visible:
-            status = "撞場待確認" if counts[(match.photographer, match.start)] > 1 else "可分類"
-            self.tree.insert("", "end", values=(match.photographer, match.date.strftime("%Y.%m.%d"), match.start.strftime("%H:%M"), match.venue, match.group, match.matchup, match.folder_name(self.event_var.get().strip()), status))
+            photographer = self.effective_photographer(match)
+            status = "撞場待確認" if counts[(photographer, match.start)] > 1 else "可分類"
+            self.tree.insert("", "end", values=(photographer, match.date.strftime("%Y.%m.%d"), match.start.strftime("%H:%M"), match.venue, match.group, match.matchup, match.folder_name(self.event_var.get().strip()), status))
         unknown = sum(1 for m in self.matches if m.photographer == "待確認")
-        self.status.set(f"共讀到 {len(self.matches)} 場，目前顯示 {len(visible)} 場；未標黃色或藍色：{unknown} 場。")
+        fallback = "；CSV 無顏色，已依目前勾選的攝影師顯示" if unknown and len(self.selected_names()) == 1 else ""
+        self.status.set(f"共讀到 {len(self.matches)} 場，目前顯示 {len(visible)} 場；未標黃色或藍色：{unknown} 場{fallback}。")
 
     def google_browser_download(self):
         url = self.source_var.get().strip()
@@ -403,9 +429,32 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror("網址錯誤", str(exc))
             return
+        self.status.set("正在自動下載 Google 預約表...")
+        threading.Thread(target=self._try_direct_google_download, args=(url, export_url), daemon=True).start()
+
+    def _try_direct_google_download(self, original_url, export_url):
+        try:
+            request = urllib.request.Request(export_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=25) as response:
+                data = response.read()
+            if not data.startswith(b"PK"):
+                raise ValueError("Google 要求登入")
+            downloads = Path.home() / "Downloads"
+            downloads.mkdir(parents=True, exist_ok=True)
+            target = downloads / "熱血少年_最新預約表.xlsx"
+            target.write_bytes(data)
+            rows, fills = read_source(str(target))
+            self.after(0, self.source_var.set, str(target))
+            self.after(0, self.show_rows, rows, fills)
+            return
+        except Exception:
+            self.after(0, self._open_google_in_browser, original_url)
+
+    def _open_google_in_browser(self, original_url):
+        export_url = sheet_export_url(original_url, "xlsx")
         downloads = Path.home() / "Downloads"
         before = {p: p.stat().st_mtime for p in downloads.glob("*.xlsx")} if downloads.exists() else {}
-        self.status.set("已開啟瀏覽器，請保持 Google 登入；正在等待 XLSX 下載...")
+        self.status.set("需要 Google 登入，已開啟瀏覽器；程式會自動接回下載的 XLSX...")
         webbrowser.open(export_url)
         threading.Thread(target=self._wait_for_csv, args=(downloads, before), daemon=True).start()
 
@@ -492,7 +541,7 @@ class App(tk.Tk):
 
     def sort_selected(self, source, output, event):
             names = self.selected_names()
-            matches = [m for m in self.matches if m.photographer in names]
+            matches = [m for m in self.matches if m.photographer in names or m.photographer == "待確認"]
             by_start: dict[datetime, list[Match]] = {}
             for match in matches:
                 by_start.setdefault(match.start, []).append(match)
