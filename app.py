@@ -721,7 +721,23 @@ class App(tk.Tk):
             for match in matches:
                 by_start.setdefault(match.start, []).append(match)
             unique = [items[0] for _, items in sorted(by_start.items()) if len(items) == 1]
-            files = [p for p in source.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and output not in p.resolve().parents]
+            destination_dirs = {output / m.folder_name(event) for m in matches}
+            destination_dirs.add(output / "待確認_同時段或無法判斷")
+
+            def is_original_photo(path):
+                if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+                    return False
+                resolved = path.resolve()
+                # Source and output are allowed to be the same folder. Only
+                # skip photos already inside folders created by this app.
+                return not any(folder.resolve() in resolved.parents for folder in destination_dirs)
+
+            files = [p for p in source.rglob("*") if is_original_photo(p)]
+            if not files:
+                raise ValueError(
+                    "照片來源內找不到可分類的照片。\n\n"
+                    "請確認選到存放照片的資料夾；目前支援 JPG、JPEG、ARW、PNG、HEIC、TIF、TIFF。"
+                )
             sorted_count = 0
             review_count = 0
             for index, photo in enumerate(files, 1):
