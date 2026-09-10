@@ -42,6 +42,9 @@ def test_date_and_time_formats():
     assert parse_start(day, "800").strftime("%H:%M") == "08:00"
     assert parse_start(day, "0825").strftime("%H:%M") == "08:25"
     assert parse_start(day, "1330").strftime("%H:%M") == "13:30"
+    assert parse_start(day, "920.0").strftime("%H:%M") == "09:20"
+    assert parse_start(day, "09:20").strftime("%H:%M") == "09:20"
+    assert parse_start(day, 0.5).strftime("%H:%M") == "12:00"
 
 
 def test_xlsx_color_and_opponent_completion(tmp_path: Path):
