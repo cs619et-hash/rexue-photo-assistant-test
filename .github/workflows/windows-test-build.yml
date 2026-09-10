@@ -33,10 +33,10 @@ jobs:
       - name: Package tested desktop app
         shell: pwsh
         run: |
-          Rename-Item "dist/RexuePhotoAssistant.exe" "熱血少年照片整理助手.exe"
-          Compress-Archive -Path "dist/熱血少年照片整理助手.exe" -DestinationPath "熱血少年照片整理助手_Windows測試版.zip"
+          Rename-Item "dist/RexuePhotoAssistant.exe" "熱血少年照片整理助手_V2.exe"
+          Compress-Archive -Path "dist/熱血少年照片整理助手_V2.exe" -DestinationPath "熱血少年照片整理助手_V2.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: rexue-photo-assistant-windows
-          path: 熱血少年照片整理助手_Windows測試版.zip
+          path: 熱血少年照片整理助手_V2.zip
           if-no-files-found: error
