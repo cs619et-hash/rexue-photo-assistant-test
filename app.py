@@ -5,6 +5,7 @@ import re
 import shutil
 import threading
 import time
+import tempfile
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -307,6 +308,8 @@ class App(tk.Tk):
         self.minsize(980, 650)
         self.configure(bg="#111827")
         self.matches: list[Match] = []
+        self.google_rows: list[list[str]] | None = None
+        self.google_fills: dict[tuple[int, int], str] | None = None
         self.source_var = tk.StringVar()
         self.photo_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -389,6 +392,8 @@ class App(tk.Tk):
     def pick_sheet(self):
         path = filedialog.askopenfilename(filetypes=[("預約表", "*.csv *.xlsx"), ("所有檔案", "*.*")])
         if path:
+            self.google_rows = None
+            self.google_fills = None
             self.source_var.set(path)
 
     def ask_google_url(self):
@@ -411,6 +416,9 @@ class App(tk.Tk):
 
     def load_schedule(self):
         source = self.source_var.get().strip()
+        if self.google_rows is not None:
+            self.show_rows(self.google_rows, self.google_fills or {})
+            return
         if source.lower().startswith("http"):
             self.google_browser_download()
             return
@@ -489,13 +497,14 @@ class App(tk.Tk):
                 data = response.read()
             if not data.startswith(b"PK"):
                 raise ValueError("Google 要求登入")
-            downloads = Path.home() / "Downloads"
-            downloads.mkdir(parents=True, exist_ok=True)
-            target = downloads / "熱血少年_最新預約表.xlsx"
-            target.write_bytes(data)
-            rows, fills = read_source(str(target))
-            self.after(0, self.source_var.set, str(target))
-            self.after(0, self.show_rows, rows, fills)
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as handle:
+                handle.write(data)
+                target = Path(handle.name)
+            try:
+                rows, fills = read_source(str(target))
+            finally:
+                target.unlink(missing_ok=True)
+            self.after(0, self._finish_google_load, rows, fills)
             return
         except Exception:
             self.after(0, self._open_google_in_browser, original_url)
@@ -507,6 +516,12 @@ class App(tk.Tk):
         self.status.set("需要 Google 登入，已開啟瀏覽器；程式會自動接回下載的 XLSX...")
         webbrowser.open(export_url)
         threading.Thread(target=self._wait_for_csv, args=(downloads, before), daemon=True).start()
+
+    def _finish_google_load(self, rows, fills):
+        self.google_rows = rows
+        self.google_fills = fills
+        self.source_var.set("Google 預約表（已自動載入）")
+        self.show_rows(rows, fills)
 
     def _wait_for_csv(self, downloads: Path, before: dict[Path, float]):
         deadline = time.time() + 120
@@ -523,8 +538,7 @@ class App(tk.Tk):
                 newest = max(candidates, key=lambda p: p.stat().st_mtime)
                 try:
                     rows, fills = read_source(str(newest))
-                    self.after(0, self.source_var.set, str(newest))
-                    self.after(0, self.show_rows, rows, fills)
+                    self.after(0, self._finish_google_load, rows, fills)
                     return
                 except Exception:
                     pass
