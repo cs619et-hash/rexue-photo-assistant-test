@@ -36,6 +36,38 @@ def test_photographer_uses_clear_button_selection_without_native_checkbox():
     app.destroy()
 
 
+def test_output_defaults_to_and_follows_photo_source(monkeypatch, tmp_path):
+    app = App()
+    app.withdraw()
+    first = tmp_path / "第一批照片"
+    second = tmp_path / "第二批照片"
+    first.mkdir()
+    second.mkdir()
+    choices = iter((str(first), str(second)))
+    monkeypatch.setattr("app.filedialog.askdirectory", lambda: next(choices))
+    assert app.same_output_var.get() is True
+    app.choose_photo_source()
+    assert app.photo_var.get() == str(first)
+    assert app.output_var.get() == str(first)
+    app.choose_photo_source()
+    assert app.output_var.get() == str(second)
+    assert app.same_output_button.cget("text").startswith("✓")
+    app.destroy()
+
+
+def test_other_output_can_be_selected(monkeypatch, tmp_path):
+    app = App()
+    app.withdraw()
+    other = tmp_path / "另外輸出"
+    other.mkdir()
+    monkeypatch.setattr("app.filedialog.askdirectory", lambda: str(other))
+    app.choose_other_output()
+    assert app.same_output_var.get() is False
+    assert app.output_var.get() == str(other)
+    assert app.other_output_button.cget("text").startswith("✓")
+    app.destroy()
+
+
 def test_csv_without_colours_uses_only_checked_photographer():
     app = App()
     app.withdraw()
