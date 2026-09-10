@@ -74,7 +74,7 @@ def test_csv_flow_creates_folder_and_sorts_photo(tmp_path: Path):
     app.output_var.set(str(output))
     app.show_rows(rows, {})
     app.create_folders()
-    folder = output / "2026.09.12-桃園獵鷹盃U10大將 vs 安東國小"
+    folder = output / "2026.09.12-桃園獵鷹盃-U10 大將 vs 安東國小"
     assert folder.is_dir()
     sorted_count, review_count = app.sort_selected(source, output, "桃園獵鷹盃")
     assert (sorted_count, review_count) == (1, 0)
