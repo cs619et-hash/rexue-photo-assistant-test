@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
-APP_NAME = "熱血少年｜賽事照片整理助手"
+APP_NAME = "熱血少年｜賽事照片整理助手 V2"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".arw", ".png", ".heic", ".tif", ".tiff"}
 INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -34,7 +34,9 @@ class Match:
 
     def folder_name(self, event_name: str) -> str:
         date_text = self.date.strftime("%Y.%m.%d")
-        return sanitize(f"{date_text}-{event_name}{self.group}{normalize_matchup(self.matchup)}")
+        event_text = sanitize(event_name)
+        prefix = f"{date_text}-{event_text}" if event_text else date_text
+        return sanitize(f"{prefix}-{self.group} {normalize_matchup(self.matchup)}")
 
 
 def sanitize(value: str) -> str:
@@ -301,8 +303,9 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1040x720")
-        self.minsize(900, 620)
+        self.geometry("1180x760")
+        self.minsize(980, 650)
+        self.configure(bg="#111827")
         self.matches: list[Match] = []
         self.source_var = tk.StringVar()
         self.photo_var = tk.StringVar()
@@ -311,34 +314,61 @@ class App(tk.Tk):
         self.mode_var = tk.StringVar(value="copy")
         self.zhixian_var = tk.BooleanVar(value=True)
         self.zhicheng_var = tk.BooleanVar(value=True)
+        self._configure_style()
         self._build()
 
+    def _configure_style(self):
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("App.TFrame", background="#111827")
+        style.configure("Card.TFrame", background="#1F2937")
+        style.configure("Title.TLabel", background="#111827", foreground="#F9FAFB", font=("Microsoft JhengHei UI", 20, "bold"))
+        style.configure("Sub.TLabel", background="#111827", foreground="#9CA3AF", font=("Microsoft JhengHei UI", 10))
+        style.configure("Field.TLabel", background="#1F2937", foreground="#E5E7EB", font=("Microsoft JhengHei UI", 10, "bold"))
+        style.configure("Status.TLabel", background="#111827", foreground="#CBD5E1", font=("Microsoft JhengHei UI", 10))
+        style.configure("TEntry", fieldbackground="#F9FAFB", foreground="#111827", padding=7)
+        style.configure("TCheckbutton", background="#1F2937", foreground="#F9FAFB", font=("Microsoft JhengHei UI", 10))
+        style.map("TCheckbutton", background=[("active", "#1F2937")], foreground=[("active", "#FFFFFF")])
+        style.configure("TRadiobutton", background="#1F2937", foreground="#E5E7EB", font=("Microsoft JhengHei UI", 10))
+        style.map("TRadiobutton", background=[("active", "#1F2937")], foreground=[("active", "#FFFFFF")])
+        style.configure("Action.TButton", background="#F97316", foreground="#FFFFFF", padding=(13, 8), font=("Microsoft JhengHei UI", 10, "bold"), borderwidth=0)
+        style.map("Action.TButton", background=[("active", "#EA580C"), ("pressed", "#C2410C")])
+        style.configure("Secondary.TButton", background="#374151", foreground="#F9FAFB", padding=(11, 7), font=("Microsoft JhengHei UI", 10), borderwidth=0)
+        style.map("Secondary.TButton", background=[("active", "#4B5563")])
+        style.configure("Treeview", background="#F8FAFC", fieldbackground="#F8FAFC", foreground="#111827", rowheight=29, borderwidth=0, font=("Microsoft JhengHei UI", 9))
+        style.configure("Treeview.Heading", background="#273449", foreground="#FFFFFF", padding=8, font=("Microsoft JhengHei UI", 9, "bold"), relief="flat")
+        style.map("Treeview", background=[("selected", "#F97316")], foreground=[("selected", "#FFFFFF")])
+
     def _build(self) -> None:
-        top = ttk.Frame(self, padding=14)
+        header = ttk.Frame(self, style="App.TFrame", padding=(18, 16, 18, 8))
+        header.pack(fill="x")
+        ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(header, text="貼上預約表、選擇攝影師，三步完成照片整理", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
+
+        top = ttk.Frame(self, style="Card.TFrame", padding=16)
         top.pack(fill="x")
-        ttk.Label(top, text=APP_NAME, font=("Microsoft JhengHei UI", 18, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
-        ttk.Label(top, text="預約表").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Entry(top, textvariable=self.source_var).grid(row=1, column=1, sticky="ew", padx=8)
-        ttk.Button(top, text="貼 Google 網址／自動下載", command=self.ask_google_url).grid(row=1, column=2, sticky="ew", padx=(0, 6))
-        ttk.Button(top, text="選擇 CSV/XLSX", command=self.pick_sheet).grid(row=1, column=3, sticky="ew")
+        ttk.Label(top, text="預約表", style="Field.TLabel").grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Entry(top, textvariable=self.source_var).grid(row=1, column=1, sticky="ew", padx=10)
+        ttk.Button(top, text="貼 Google 網址", style="Action.TButton", command=self.ask_google_url).grid(row=1, column=2, sticky="ew", padx=(0, 6))
+        ttk.Button(top, text="選擇 XLSX／CSV", style="Secondary.TButton", command=self.pick_sheet).grid(row=1, column=3, sticky="ew")
         self._row(top, 2, "照片來源", self.photo_var, lambda: self.pick_dir(self.photo_var), "選擇資料夾")
         self._row(top, 3, "輸出位置", self.output_var, lambda: self.pick_dir(self.output_var), "選擇資料夾")
-        ttk.Label(top, text="賽事名稱").grid(row=4, column=0, sticky="w", pady=6)
-        ttk.Entry(top, textvariable=self.event_var).grid(row=4, column=1, sticky="ew", padx=8)
-        ttk.Radiobutton(top, text="複製照片（安全，推薦）", variable=self.mode_var, value="copy").grid(row=4, column=2, sticky="w")
+        ttk.Label(top, text="賽事名稱", style="Field.TLabel").grid(row=4, column=0, sticky="w", pady=6)
+        ttk.Entry(top, textvariable=self.event_var).grid(row=4, column=1, sticky="ew", padx=10)
+        ttk.Radiobutton(top, text="複製照片（推薦）", variable=self.mode_var, value="copy").grid(row=4, column=2, sticky="w")
         ttk.Radiobutton(top, text="移動照片", variable=self.mode_var, value="move").grid(row=4, column=3, sticky="w")
-        ttk.Label(top, text="攝影師").grid(row=5, column=0, sticky="w", pady=6)
+        ttk.Label(top, text="攝影師", style="Field.TLabel").grid(row=5, column=0, sticky="w", pady=6)
         photographer_box = ttk.Frame(top)
         photographer_box.grid(row=5, column=1, columnspan=3, sticky="w", padx=8)
         ttk.Checkbutton(photographer_box, text="植先（黃色）", variable=self.zhixian_var, command=self.photographer_changed).pack(side="left")
         ttk.Checkbutton(photographer_box, text="植丞（藍色）", variable=self.zhicheng_var, command=self.photographer_changed).pack(side="left", padx=(16, 0))
         top.columnconfigure(1, weight=1)
 
-        buttons = ttk.Frame(self, padding=(14, 0, 14, 8))
+        buttons = ttk.Frame(self, style="App.TFrame", padding=(18, 14, 18, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="① 讀取預約表", command=self.load_schedule).pack(side="left")
-        ttk.Button(buttons, text="② 建立資料夾", command=self.create_folders).pack(side="left", padx=8)
-        ttk.Button(buttons, text="③ 自動分類照片", command=self.start_sort).pack(side="left")
+        ttk.Button(buttons, text="1  讀取預約表", style="Secondary.TButton", command=self.load_schedule).pack(side="left")
+        ttk.Button(buttons, text="2  建立資料夾", style="Secondary.TButton", command=self.create_folders).pack(side="left", padx=8)
+        ttk.Button(buttons, text="3  自動分類照片", style="Action.TButton", command=self.start_sort).pack(side="left")
 
         columns = ("photographer", "date", "time", "venue", "group", "matchup", "folder", "status")
         self.tree = ttk.Treeview(self, columns=columns, show="headings")
@@ -347,14 +377,14 @@ class App(tk.Tk):
         for col in columns:
             self.tree.heading(col, text=labels[col])
             self.tree.column(col, width=widths[col], anchor="w")
-        self.tree.pack(fill="both", expand=True, padx=14)
+        self.tree.pack(fill="both", expand=True, padx=18)
         self.status = tk.StringVar(value="先貼上 Google 試算表網址，或選擇 CSV／XLSX。")
-        ttk.Label(self, textvariable=self.status, padding=14).pack(fill="x")
+        ttk.Label(self, textvariable=self.status, style="Status.TLabel", padding=(18, 12)).pack(fill="x")
 
     def _row(self, parent, row, label, variable, command, button_text):
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=6)
-        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", padx=8)
-        ttk.Button(parent, text=button_text, command=command).grid(row=row, column=3, sticky="ew")
+        ttk.Label(parent, text=label, style="Field.TLabel").grid(row=row, column=0, sticky="w", pady=6)
+        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", padx=10)
+        ttk.Button(parent, text=button_text, style="Secondary.TButton", command=command).grid(row=row, column=3, sticky="ew")
 
     def pick_sheet(self):
         path = filedialog.askopenfilename(filetypes=[("預約表", "*.csv *.xlsx"), ("所有檔案", "*.*")])
