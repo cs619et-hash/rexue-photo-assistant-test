@@ -5,6 +5,7 @@ import ctypes
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import tempfile
@@ -24,6 +25,11 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 APP_NAME = "熱血少年｜賽事照片整理助手 V2"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".arw", ".png", ".heic", ".tif", ".tiff"}
 INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def bundled_path(relative: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / relative
 
 
 @dataclass
@@ -374,8 +380,17 @@ def newest_downloaded_xlsx(folders: list[Path], before: dict[Path, float], since
 
 class App(tk.Tk):
     def __init__(self) -> None:
+        if os.name == "nt":
+            try:
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Rexue.PhotoAssistant.V2")
+            except Exception:
+                pass
         super().__init__()
         self.title(APP_NAME)
+        try:
+            self.iconbitmap(default=str(bundled_path("assets/rexue_app_icon.ico")))
+        except tk.TclError:
+            pass
         self.geometry("1180x760")
         self.minsize(980, 650)
         self.configure(bg="#111827")

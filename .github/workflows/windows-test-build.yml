@@ -21,7 +21,7 @@ jobs:
       - name: Run Windows GUI test
         run: python -m pytest tests/test_gui.py -q
       - name: Build single Windows EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name "RexuePhotoAssistant" app.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name "RexuePhotoAssistant" --icon "assets/rexue_app_icon.ico" --add-data "assets/rexue_app_icon.ico;assets" app.py
       - name: Smoke-test EXE startup
         shell: pwsh
         run: |
