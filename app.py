@@ -400,6 +400,7 @@ class App(tk.Tk):
         self.source_var = tk.StringVar()
         self.photo_var = tk.StringVar()
         self.output_var = tk.StringVar()
+        self.same_output_var = tk.BooleanVar(value=True)
         self.event_var = tk.StringVar(value="")
         self.mode_var = tk.StringVar(value="copy")
         self.zhixian_var = tk.BooleanVar(value=True)
@@ -448,8 +449,23 @@ class App(tk.Tk):
         ttk.Entry(top, textvariable=self.source_var).grid(row=1, column=1, sticky="ew", padx=10)
         ttk.Button(top, text="貼 Google 網址", style="Action.TButton", command=self.ask_google_url).grid(row=1, column=2, sticky="ew", padx=(0, 6))
         ttk.Button(top, text="選擇 XLSX／CSV", style="Secondary.TButton", command=self.pick_sheet).grid(row=1, column=3, sticky="ew")
-        self._row(top, 2, "照片來源", self.photo_var, lambda: self.pick_dir(self.photo_var), "選擇資料夾")
-        self._row(top, 3, "輸出位置", self.output_var, lambda: self.pick_dir(self.output_var), "選擇資料夾")
+        self._row(top, 2, "照片來源", self.photo_var, self.choose_photo_source, "選擇資料夾")
+        ttk.Label(top, text="輸出位置", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=6)
+        self.output_entry = ttk.Entry(top, textvariable=self.output_var)
+        self.output_entry.grid(row=3, column=1, sticky="ew", padx=10)
+        self.same_output_button = tk.Button(
+            top, command=self.use_same_output, text="✓  同照片來源",
+            font=("Microsoft JhengHei UI", 9, "bold"), relief="flat", bd=0,
+            padx=12, pady=7, cursor="hand2", takefocus=False,
+        )
+        self.same_output_button.grid(row=3, column=2, sticky="ew", padx=(0, 6))
+        self.other_output_button = tk.Button(
+            top, command=self.choose_other_output, text="其他位置",
+            font=("Microsoft JhengHei UI", 9, "bold"), relief="flat", bd=0,
+            padx=12, pady=7, cursor="hand2", takefocus=False,
+        )
+        self.other_output_button.grid(row=3, column=3, sticky="ew")
+        self.update_output_mode_buttons()
         ttk.Label(top, text="賽事名稱", style="Field.TLabel").grid(row=4, column=0, sticky="w", pady=6)
         ttk.Entry(top, textvariable=self.event_var).grid(row=4, column=1, sticky="ew", padx=10)
         ttk.Radiobutton(top, text="複製照片（推薦）", variable=self.mode_var, value="copy").grid(row=4, column=2, sticky="w")
@@ -523,6 +539,44 @@ class App(tk.Tk):
         path = filedialog.askdirectory()
         if path:
             variable.set(path)
+
+    def choose_photo_source(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.photo_var.set(path)
+            if self.same_output_var.get():
+                self.output_var.set(path)
+
+    def use_same_output(self):
+        self.same_output_var.set(True)
+        self.output_var.set(self.photo_var.get().strip())
+        self.update_output_mode_buttons()
+        self.status.set("輸出位置會跟隨照片來源，不需要再選一次。")
+
+    def choose_other_output(self):
+        path = filedialog.askdirectory()
+        if not path:
+            return
+        self.same_output_var.set(False)
+        self.output_var.set(path)
+        self.update_output_mode_buttons()
+
+    def update_output_mode_buttons(self):
+        same = self.same_output_var.get()
+        self.same_output_button.configure(
+            text="✓  同照片來源" if same else "同照片來源",
+            bg="#F97316" if same else "#374151",
+            fg="#FFFFFF" if same else "#CBD5E1",
+            activebackground="#EA580C" if same else "#4B5563",
+            activeforeground="#FFFFFF",
+        )
+        self.other_output_button.configure(
+            text="✓  其他位置" if not same else "其他位置",
+            bg="#F97316" if not same else "#374151",
+            fg="#FFFFFF" if not same else "#CBD5E1",
+            activebackground="#EA580C" if not same else "#4B5563",
+            activeforeground="#FFFFFF",
+        )
 
     def load_schedule(self):
         source = self.source_var.get().strip()
