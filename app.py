@@ -513,7 +513,7 @@ class App(tk.Tk):
         export_url = sheet_export_url(original_url, "xlsx")
         downloads = Path.home() / "Downloads"
         before = {p: p.stat().st_mtime for p in downloads.glob("*.xlsx")} if downloads.exists() else {}
-        self.status.set("需要 Google 登入，已開啟瀏覽器；程式會自動接回下載的 XLSX...")
+        self.status.set("已開啟瀏覽器下載預約表，下載完成後會自動帶入程式，請勿關閉程式。")
         webbrowser.open(export_url)
         threading.Thread(target=self._wait_for_csv, args=(downloads, before), daemon=True).start()
 
