@@ -52,6 +52,23 @@ def test_no_photographer_checked_hides_rows_without_false_selection():
     app.destroy()
 
 
+def test_google_sheet_is_kept_inside_app_without_showing_file_path():
+    app = App()
+    app.withdraw()
+    rows = [
+        ["比賽日期", "比賽開始時間", "比賽地點", "年級組別", "隊伍名稱/球員姓名/背號", "比賽隊伍名稱"],
+        ["2026年09月12日", "0800", "甲", "U10", "大將", "安東國小"],
+    ]
+    app._finish_google_load(rows, {})
+    assert app.source_var.get() == "Google 預約表（已自動載入）"
+    assert app.google_rows == rows
+    assert len(app.matches) == 1
+    app.matches = []
+    app.load_schedule()
+    assert len(app.matches) == 1
+    app.destroy()
+
+
 def test_csv_flow_creates_folder_and_sorts_photo(tmp_path: Path):
     app = App()
     app.withdraw()
