@@ -1,0 +1,40 @@
+name: Windows test and build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install test and build tools
+        run: python -m pip install --upgrade pytest openpyxl pillow pyinstaller
+      - name: Run core tests
+        run: python -m pytest tests/test_core.py -q
+      - name: Run Windows GUI test
+        run: python -m pytest tests/test_gui.py -q
+      - name: Build single Windows EXE
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name "熱血少年照片整理助手" app.py
+      - name: Smoke-test EXE startup
+        shell: powershell
+        run: |
+          $exe = Resolve-Path "dist/熱血少年照片整理助手.exe"
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 5
+          if ($process.HasExited) { throw "EXE closed unexpectedly with code $($process.ExitCode)" }
+          Stop-Process -Id $process.Id -Force
+      - name: Package tested desktop app
+        shell: powershell
+        run: Compress-Archive -Path "dist/熱血少年照片整理助手.exe" -DestinationPath "熱血少年照片整理助手_Windows測試版.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rexue-photo-assistant-windows
+          path: 熱血少年照片整理助手_Windows測試版.zip
+          if-no-files-found: error
