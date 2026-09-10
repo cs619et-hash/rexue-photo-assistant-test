@@ -79,3 +79,9 @@ def test_duplicate_filename_is_not_overwritten(tmp_path: Path):
     original = tmp_path / "DSC0001.JPG"
     original.write_bytes(b"first")
     assert unique_destination(original).name == "DSC0001_2.JPG"
+
+
+def test_v2_folder_name_format():
+    from app import Match
+    match = Match(datetime(2026, 8, 29), datetime(2026, 8, 29, 9, 20), "甲", "U10", "巴格浪 VS LS紅羚")
+    assert match.folder_name("AIA盃") == "2026.08.29-AIA盃-U10 巴格浪 vs LS紅羚"
