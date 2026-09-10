@@ -14,6 +14,7 @@ import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 import tkinter as tk
@@ -740,7 +741,19 @@ class App(tk.Tk):
                 )
             sorted_count = 0
             review_count = 0
-            for index, photo in enumerate(files, 1):
+            jobs: list[tuple[Path, Path]] = []
+            reserved: set[Path] = set()
+
+            def reserve_destination(target_dir, filename):
+                candidate = target_dir / filename
+                counter = 2
+                while candidate.exists() or candidate in reserved:
+                    candidate = target_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+                    counter += 1
+                reserved.add(candidate)
+                return candidate
+
+            for photo in files:
                 taken = photo_taken_at(photo)
                 candidates = [m for m in unique if m.start.date() == taken.date() and m.start - timedelta(minutes=10) <= taken <= m.start + timedelta(minutes=100)]
                 candidates.sort(key=lambda m: abs((taken - m.start).total_seconds()))
@@ -757,13 +770,28 @@ class App(tk.Tk):
                     target_dir = output / "待確認_同時段或無法判斷"
                     review_count += 1
                 target_dir.mkdir(parents=True, exist_ok=True)
-                destination = unique_destination(target_dir / photo.name)
+                jobs.append((photo, reserve_destination(target_dir, photo.name)))
+
+            total = len(jobs)
+            completed = 0
+
+            def transfer(job):
+                photo, destination = job
                 if self.mode_var.get() == "move":
                     shutil.move(str(photo), destination)
                 else:
                     shutil.copy2(photo, destination)
-                if index % 20 == 0:
-                    self.after(0, self.status.set, f"照片處理中：{index}/{len(files)}")
+
+            # A small worker pool materially improves SSD/card-reader copying,
+            # while avoiding the slowdown caused by excessive parallel I/O.
+            workers = min(4, total)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(transfer, job) for job in jobs]
+                for future in as_completed(futures):
+                    future.result()
+                    completed += 1
+                    if completed == total or completed % 20 == 0:
+                        self.after(0, self.status.set, f"正在處理照片：{completed}／{total} 張…")
             return sorted_count, review_count
 
 
