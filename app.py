@@ -307,7 +307,7 @@ class App(tk.Tk):
         self.source_var = tk.StringVar()
         self.photo_var = tk.StringVar()
         self.output_var = tk.StringVar()
-        self.event_var = tk.StringVar(value="桃園獵鷹盃")
+        self.event_var = tk.StringVar(value="")
         self.mode_var = tk.StringVar(value="copy")
         self.zhixian_var = tk.BooleanVar(value=True)
         self.zhicheng_var = tk.BooleanVar(value=True)
