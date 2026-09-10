@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import ctypes
+import os
 import re
 import shutil
 import threading
@@ -300,6 +302,75 @@ def unique_destination(path: Path) -> Path:
         counter += 1
 
 
+def google_download_folders() -> list[Path]:
+    """Actual Windows/common browser save locations, including redirected folders."""
+    def add(folder: Path | str | None) -> None:
+        if not folder:
+            return
+        try:
+            path = Path(os.path.expandvars(str(folder))).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return
+        if path.is_dir() and path not in folders:
+            folders.append(path)
+
+    folders: list[Path] = []
+
+    # Ask Windows for the real paths. This handles OneDrive/Known Folder
+    # redirection even when the visible Desktop is not USERPROFILE\Desktop.
+    if os.name == "nt":
+        known_folder_ids = (
+            "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",  # Desktop
+            "{374DE290-123F-4565-9164-39C4925E467B}",  # Downloads
+        )
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                for value_name in ("Desktop", "{374DE290-123F-4565-9164-39C4925E467B}"):
+                    try:
+                        add(winreg.QueryValueEx(key, value_name)[0])
+                    except OSError:
+                        pass
+        except (ImportError, OSError):
+            pass
+        try:
+            from uuid import UUID
+            shell32 = ctypes.windll.shell32
+            ole32 = ctypes.windll.ole32
+            for guid_text in known_folder_ids:
+                guid = (ctypes.c_ubyte * 16).from_buffer_copy(UUID(guid_text).bytes_le)
+                result = ctypes.c_wchar_p()
+                if shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(result)) == 0:
+                    add(result.value)
+                    ole32.CoTaskMemFree(result)
+        except Exception:
+            pass
+
+    roots = [Path.home()]
+    for key in ("USERPROFILE", "OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        value = os.environ.get(key)
+        if value:
+            roots.append(Path(value))
+    for root in roots:
+        for name in ("Downloads", "Desktop", "下載", "桌面"):
+            add(root / name)
+    return folders
+
+
+def newest_downloaded_xlsx(folders: list[Path], before: dict[Path, float], since: float) -> Path | None:
+    candidates: list[Path] = []
+    for folder in folders:
+        for path in folder.glob("*.xlsx"):
+            try:
+                modified = path.stat().st_mtime
+                if modified > before.get(path, 0) and modified >= since:
+                    candidates.append(path)
+            except OSError:
+                pass
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -511,11 +582,14 @@ class App(tk.Tk):
 
     def _open_google_in_browser(self, original_url):
         export_url = sheet_export_url(original_url, "xlsx")
-        downloads = Path.home() / "Downloads"
-        before = {p: p.stat().st_mtime for p in downloads.glob("*.xlsx")} if downloads.exists() else {}
-        self.status.set("已開啟瀏覽器下載預約表，下載完成後會自動帶入程式，請勿關閉程式。")
+        folders = google_download_folders()
+        before = {p: p.stat().st_mtime for folder in folders for p in folder.glob("*.xlsx")}
+        if not folders:
+            messagebox.showerror("找不到下載位置", "程式找不到 Windows 的桌面或下載資料夾，請改用右側「選擇 XLSX／CSV」。")
+            return
+        self.status.set("已開啟瀏覽器下載預約表；下載完成後會自動帶入，請勿關閉程式。")
         webbrowser.open(export_url)
-        threading.Thread(target=self._wait_for_csv, args=(downloads, before), daemon=True).start()
+        threading.Thread(target=self._wait_for_csv, args=(folders, before), daemon=True).start()
 
     def _finish_google_load(self, rows, fills):
         self.google_rows = rows
@@ -523,20 +597,22 @@ class App(tk.Tk):
         self.source_var.set("Google 預約表（已自動載入）")
         self.show_rows(rows, fills)
 
-    def _wait_for_csv(self, downloads: Path, before: dict[Path, float]):
+    def _wait_for_csv(self, folders: list[Path], before: dict[Path, float]):
         deadline = time.time() + 120
+        started = time.time() - 3
         while time.time() < deadline:
-            candidates = []
-            if downloads.exists():
-                for path in downloads.glob("*.xlsx"):
-                    try:
-                        if path.stat().st_mtime > before.get(path, 0) and path.stat().st_mtime > time.time() - 150:
-                            candidates.append(path)
-                    except OSError:
-                        pass
-            if candidates:
-                newest = max(candidates, key=lambda p: p.stat().st_mtime)
+            newest = newest_downloaded_xlsx(folders, before, started)
+            if newest:
                 try:
+                    # Chrome/Edge may expose the final name before all bytes are
+                    # flushed. Wait briefly until the file size is stable.
+                    previous_size = -1
+                    for _ in range(10):
+                        size = newest.stat().st_size
+                        if size > 0 and size == previous_size:
+                            break
+                        previous_size = size
+                        time.sleep(0.25)
                     rows, fills = read_source(str(newest))
                     self.after(0, self._finish_google_load, rows, fills)
                     return
@@ -546,8 +622,8 @@ class App(tk.Tk):
         self.after(0, self._download_timeout)
 
     def _download_timeout(self):
-        self.status.set("尚未偵測到 XLSX；可按右側「選擇 CSV/XLSX」選取下載檔。")
-        messagebox.showinfo("尚未找到下載檔", "瀏覽器若已下載完成，請按右側「選擇 CSV/XLSX」，到下載資料夾選取剛才的 XLSX。")
+        self.status.set("尚未偵測到 XLSX；可按右側「選擇 XLSX／CSV」選取檔案。")
+        messagebox.showinfo("尚未找到下載檔", "程式沒有在桌面或下載資料夾找到新的 XLSX。請按右側「選擇 XLSX／CSV」選取檔案。")
 
     def create_folders(self):
         if not self.matches:
