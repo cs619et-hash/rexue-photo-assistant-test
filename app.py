@@ -774,10 +774,11 @@ class App(tk.Tk):
 
             total = len(jobs)
             completed = 0
+            transfer_mode = self.mode_var.get()
 
             def transfer(job):
                 photo, destination = job
-                if self.mode_var.get() == "move":
+                if transfer_mode == "move":
                     shutil.move(str(photo), destination)
                 else:
                     shutil.copy2(photo, destination)
