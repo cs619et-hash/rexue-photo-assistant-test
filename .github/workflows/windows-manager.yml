@@ -1,0 +1,52 @@
+name: Manager Windows EXE
+on:
+  push:
+    branches: [codex/manager-windows-v1-1]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install build dependencies
+        run: python -m pip install pyinstaller google-api-python-client google-auth-httplib2 google-auth-oauthlib
+      - name: Protocol tests
+        working-directory: manager
+        run: |
+          python test_line_client.py
+          node test_worker.mjs
+      - name: Source GUI tests
+        working-directory: manager
+        run: python rexue_manager.py --self-test source-test.json
+      - name: Build Windows EXE
+        working-directory: manager
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name RexueManager_v1.1 --icon ../assets/rexue_app_icon.ico --add-data 'rexue-line-worker.mjs;.' rexue_manager.py
+      - name: Test packaged Windows EXE
+        working-directory: manager
+        shell: pwsh
+        run: |
+          $result = Join-Path $PWD 'exe-test.json'
+          $process = Start-Process -FilePath '.\dist\RexueManager_v1.1.exe' -ArgumentList "--self-test `"$result`"" -PassThru
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'EXE test timeout' }
+          if ($process.ExitCode -ne 0) { throw "EXE exit code: $($process.ExitCode)" }
+          if (-not (Test-Path $result)) { throw 'EXE did not finish tests' }
+          $test = Get-Content $result | ConvertFrom-Json
+          if (-not $test.ok) { throw 'EXE self-test failed' }
+          Get-FileHash '.\dist\RexueManager_v1.1.exe' -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RexueManager-v1.1-Windows
+          path: |
+            manager/dist/RexueManager_v1.1.exe
+            manager/exe-test.json
+            manager/source-test.json
+          if-no-files-found: error

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import worker from './rexue-line-worker.mjs';
+let queried=false;
+const db={batch:async()=>[],prepare(sql){ return {bind(t){assert(Number.isSafeInteger(t));return this},async all(){ queried=true;assert(sql.includes('expires_at > ?'));assert(sql.includes('revoked = 0'));return {results:[]}} }; }};
+const env={EXE_API_TOKEN:'test-token',DB:db};
+const req=(token)=>new Request('https://example.test/api/messages',{headers:token?{Authorization:'Bearer '+token}:{}});
+assert.equal((await worker.fetch(req(),env)).status,401);
+assert.equal((await worker.fetch(req('incorrect'),env)).status,401);
+assert.equal(queried,false);
+const result=await worker.fetch(req('test-token'),env);
+assert.equal(result.status,200);assert.deepEqual(await result.json(),{version:'1.1',messages:[]});
+assert.equal((await worker.fetch(req('test-token'),{EXE_API_TOKEN:'test-token'})).status,503);
+console.log('Worker: auth denial, authorized read, expiry filtering, missing DB passed');
