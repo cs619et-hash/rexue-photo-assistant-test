@@ -123,7 +123,7 @@ def split_team_player(value):
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title('熱血少年｜拍攝工作管理 v1.1')
+        self.root.title('熱血少年｜拍攝工作管理 v1.2')
         self.root.geometry('1180x720')
         self.root.minsize(1000, 620)
         self.db = sqlite3.connect(DB_PATH)
@@ -161,6 +161,10 @@ class App:
             calendar_id TEXT, synced_at TEXT
         );
         ''')
+        self.db.execute("""CREATE TABLE IF NOT EXISTS line_payment_drafts (
+            id INTEGER PRIMARY KEY, message_key TEXT UNIQUE NOT NULL,
+            case_id INTEGER NOT NULL, amount REAL NOT NULL, paid_date TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT '待確認', created_at TEXT NOT NULL)""")
         for name, definition in [
             ('source_key', 'TEXT'), ('source_name', 'TEXT'),
             ('source_row', 'INTEGER'), ('last_synced_at', 'TEXT')
@@ -188,7 +192,8 @@ class App:
         connection_bar.pack(fill='x')
         ttk.Button(connection_bar, text='LINE 金鑰設定', command=self.reset_line_token).pack(side='left')
         ttk.Button(connection_bar, text='雲端修復說明', command=self.cloud_help).pack(side='left', padx=8)
-        ttk.Label(connection_bar, text='  v1.1｜LINE 連線診斷').pack(side='left')
+        ttk.Button(connection_bar, text='待確認收款', command=self.show_payment_drafts).pack(side='left', padx=8)
+        ttk.Label(connection_bar, text='  v1.2｜LINE 預約與收款').pack(side='left')
 
         cards = ttk.Frame(self.root, padding=(16, 0)); cards.pack(fill='x')
         self.stats = {}
@@ -286,13 +291,90 @@ class App:
         messagebox.showinfo('設定已儲存', '尚未驗證連線，請按「同步 LINE 訊息」。', parent=self.root)
 
     def show_line_messages(self, messages):
-        win = tk.Toplevel(self.root); win.title('LINE 訊息｜熱血少年'); win.geometry('820x520')
-        tree = self.tree(win, ['時間', '訊息內容', '狀態'], [160, 530, 90])
+        win = tk.Toplevel(self.root); win.title('LINE 訊息｜選取後建立紀錄'); win.geometry('900x580')
+        bar = ttk.Frame(win, padding=8); bar.pack(fill='x')
+        tree = self.tree(win, ['時間', '訊息內容'], [160, 650])
+        items = {}
         for item in messages:
             ts = item.get('received_at') or item.get('sent_at') or 0
             try: time_text = datetime.fromtimestamp(int(ts) / 1000).strftime('%Y-%m-%d %H:%M')
             except Exception: time_text = str(ts)
-            tree.insert('', 'end', values=(time_text, item.get('text_content', ''), '已收到'))
+            iid = tree.insert('', 'end', values=(time_text, item.get('text_content', '')))
+            items[iid] = item
+        def selected(action):
+            sel = tree.selection()
+            if not sel: return messagebox.showinfo('選取訊息', '請先點選一則 LINE 訊息。', parent=win)
+            item = items[sel[0]]
+            if not item.get('message_key'): return messagebox.showerror('無法建立', '此訊息缺少識別碼，請重新同步。', parent=win)
+            action(item)
+        ttk.Button(bar, text='轉成預約案件', command=lambda: selected(self.line_case)).pack(side='left', padx=4)
+        ttk.Button(bar, text='建立待確認收款', command=lambda: selected(self.line_payment)).pack(side='left', padx=4)
+        ttk.Label(bar, text='先選訊息，再確認欄位；不會自動入帳。').pack(side='left', padx=12)
+
+    def line_case(self, item):
+        key = 'line:' + item['message_key']
+        if self.db.execute('SELECT id FROM cases WHERE source_key=?', (key,)).fetchone():
+            return messagebox.showinfo('已建立', '這則訊息已建立過預約案件。')
+        self.add_case(line_item=item)
+
+    def line_payment(self, item):
+        rows = self.db.execute('SELECT id,team,player,date FROM cases ORDER BY id DESC').fetchall()
+        if not rows: return messagebox.showinfo('尚無案件', '請先建立預約案件，再登記收款。')
+        labels = [f"{r['id']}｜{r['date']}｜{r['team']}｜{r['player']}" for r in rows]
+        fields = [('case','收款對應案件','combo',labels), ('amount','本次金額（元）','entry',None), ('date','匯款日期 YYYY-MM-DD','entry',None)]
+        w,v = self.form('LINE 待確認收款',fields,{'date':datetime.now().strftime('%Y-%m-%d')})
+        ttk.Label(w,text=str(item.get('text_content',''))[:700],wraplength=430).grid(row=3,column=0,columnspan=2,padx=12,pady=8)
+        def save():
+            try:
+                cid = int(v['case'].get().split('｜')[0])
+                self.create_payment_draft(item['message_key'],cid,v['amount'].get(),v['date'].get())
+            except (ValueError, sqlite3.IntegrityError) as exc:
+                return messagebox.showwarning('未儲存',str(exc),parent=w)
+            w.destroy(); messagebox.showinfo('已登記','已加入待確認收款，案件已收金額尚未變動。')
+        ttk.Button(w,text='加入待確認收款',command=save).grid(row=4,column=1,pady=12)
+
+    def create_payment_draft(self,key,cid,amount,paid_date):
+        import math
+        amount = float(amount)
+        if not math.isfinite(amount) or amount <= 0 or round(amount,2) != amount:
+            raise ValueError('金額必須大於零，最多兩位小數。')
+        datetime.strptime(paid_date,'%Y-%m-%d')
+        if not self.db.execute('SELECT id FROM cases WHERE id=?',(cid,)).fetchone():
+            raise ValueError('請選擇有效案件。')
+        if self.db.execute('SELECT id FROM line_payment_drafts WHERE message_key=?',(key,)).fetchone():
+            raise ValueError('這則訊息已登記過收款，不能重複加入。')
+        with self.db:
+            self.db.execute('INSERT INTO line_payment_drafts(message_key,case_id,amount,paid_date,created_at) VALUES(?,?,?,?,?)',
+                (key,cid,amount,paid_date,datetime.now().isoformat()))
+
+    def confirm_payment_draft(self,did):
+        with self.db:
+            r = self.db.execute("SELECT * FROM line_payment_drafts WHERE id=? AND state='待確認'",(did,)).fetchone()
+            if not r: return False
+            if not self.db.execute('SELECT id FROM cases WHERE id=?',(r['case_id'],)).fetchone(): raise ValueError('案件已不存在。')
+            self.db.execute('INSERT INTO payments(case_id,amount,paid_date,note,created_at) VALUES(?,?,?,?,?)',
+                (r['case_id'],r['amount'],r['paid_date'],'LINE 收款確認',datetime.now().isoformat()))
+            self.db.execute('UPDATE cases SET received=ROUND(COALESCE(received,0)+?,2) WHERE id=?',(r['amount'],r['case_id']))
+            self.db.execute("UPDATE line_payment_drafts SET state='已入帳' WHERE id=?",(did,))
+        return True
+
+    def show_payment_drafts(self):
+        w = tk.Toplevel(self.root); w.title('待確認收款｜確認銀行入帳後操作'); w.geometry('800x450')
+        bar = ttk.Frame(w,padding=8); bar.pack(fill='x')
+        tree = self.tree(w,['日期','案件','金額','狀態'],[120,350,120,100])
+        def reload():
+            for i in tree.get_children(): tree.delete(i)
+            for r in self.db.execute("SELECT d.*,c.team,c.player FROM line_payment_drafts d LEFT JOIN cases c ON c.id=d.case_id ORDER BY d.id DESC"):
+                tree.insert('', 'end', iid=str(r['id']),values=(r['paid_date'],f"#{r['case_id']} {r['team']} {r['player']}",r['amount'],r['state']))
+        def confirm():
+            sel = tree.selection()
+            if not sel: return
+            if not messagebox.askyesno('確認實際收款','已核對銀行確實收到這筆款項？確認後會增加案件已收金額。',parent=w): return
+            try: self.confirm_payment_draft(int(sel[0]))
+            except (ValueError,sqlite3.Error) as exc: return messagebox.showerror('未入帳',str(exc),parent=w)
+            reload(); self.refresh()
+        ttk.Button(bar,text='已核對銀行，確認入帳',command=confirm).pack(side='left')
+        reload()
 
     def tree(self, parent, cols, widths):
         frame = ttk.Frame(parent); frame.pack(fill='both', expand=True)
@@ -338,16 +420,31 @@ class App:
     def save_event(self,w,v):
         if not v['name'].get().strip(): return messagebox.showwarning('提醒','請輸入賽事名稱',parent=w)
         self.db.execute('INSERT INTO events(name,stage,start_date,end_date,venue,notes,created_at) VALUES(?,?,?,?,?,?,?)',(v['name'].get(),v['stage'].get(),v['start'].get(),v['end'].get() or v['start'].get(),v['venue'].get(),v['notes'].get(),datetime.now().isoformat())); self.db.commit(); w.destroy(); self.refresh()
-    def add_case(self):
+    def add_case(self, line_item=None):
         events=self.db.execute('SELECT id,name,stage FROM events ORDER BY start_date DESC').fetchall()
         if not events: return messagebox.showinfo('提醒','請先新增賽事')
         labels=[f"{r['id']}｜{r['name']}｜{r['stage']}" for r in events]
         f=[('event','選擇賽事','combo',labels),('date','比賽日期 YYYY-MM-DD','entry',None),('time','比賽時間','entry',None),('team','隊伍名稱','entry',None),('player','球員姓名','entry',None),('number','背號','entry',None),('grade','年級組','entry',None),('opponent','對手／對戰','entry',None),('contact','家長／教練','entry',None),('quoted','應收金額','entry',None),('received','已收金額','entry',None),('status','狀態','combo',['新預約','已確認','已拍攝','已交件','已收款','完成'])]
         w,v=self.form('新增預約案件',f,{'status':'新預約','received':'0'}); v['event'].set(labels[0])
+        w.line_item = line_item
+        if line_item:
+            ttk.Label(w,text=str(line_item.get('text_content',''))[:700],wraplength=430).grid(row=len(f)+1,column=0,columnspan=2,padx=12,pady=8)
         ttk.Button(w,text='儲存',command=lambda:self.save_case(w,v,events,labels)).grid(row=len(f),column=1,pady=12,sticky='e')
     def save_case(self,w,v,events,labels):
         try: event_id=int(v['event'].get().split('｜')[0]); quoted=float(v['quoted'].get() or 0); received=float(v['received'].get() or 0)
         except: return messagebox.showwarning('提醒','賽事或金額格式不正確',parent=w)
+        item = getattr(w,'line_item',None)
+        if item:
+            import math
+            if not math.isfinite(quoted) or quoted < 0 or received != 0:
+                return messagebox.showwarning('請確認','應收需為非負金額；LINE 新預約已收金額須為 0，收款請另外確認。',parent=w)
+            try:
+                with self.db:
+                    self.db.execute('INSERT INTO cases(event_id,date,time,team,player,number,grade,opponent,contact,quoted,received,status,created_at,source_key,source_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (event_id,v['date'].get(),v['time'].get(),v['team'].get(),v['player'].get(),v['number'].get(),v['grade'].get(),v['opponent'].get(),v['contact'].get(),quoted,0,'新預約',datetime.now().isoformat(),'line:'+item['message_key'],'LINE'))
+            except sqlite3.IntegrityError:
+                return messagebox.showinfo('已建立','這則訊息已建立過案件。',parent=w)
+            w.destroy(); self.refresh(); return
         self.db.execute('INSERT INTO cases(event_id,date,time,team,player,number,grade,opponent,contact,quoted,received,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(event_id,v['date'].get(),v['time'].get(),v['team'].get(),v['player'].get(),v['number'].get(),v['grade'].get(),v['opponent'].get(),v['contact'].get(),quoted,received,v['status'].get(),datetime.now().isoformat())); self.db.commit(); w.destroy(); self.refresh()
     def edit_case(self):
         sel=self.case_tree.selection()
@@ -551,10 +648,23 @@ def self_test(output_path):
         visit(root)
         assert 'LINE 金鑰設定' in texts and '雲端修復說明' in texts
         assert root.winfo_width() >= 1000
+        app.db.execute("INSERT INTO cases(team,received,created_at) VALUES('test',0,'test')")
+        app.db.commit()
+        cid = app.db.execute('SELECT MAX(id) FROM cases').fetchone()[0]
+        app.create_payment_draft('test-message',cid,'1700','2026-09-15')
+        assert app.db.execute('SELECT received FROM cases WHERE id=?',(cid,)).fetchone()[0] == 0
+        try: app.create_payment_draft('test-message',cid,'1700','2026-09-15')
+        except ValueError: pass
+        else: raise AssertionError('Duplicate draft accepted')
+        did = app.db.execute('SELECT id FROM line_payment_drafts').fetchone()[0]
+        assert app.confirm_payment_draft(did)
+        assert not app.confirm_payment_draft(did)
+        assert app.db.execute('SELECT received FROM cases WHERE id=?',(cid,)).fetchone()[0] == 1700
+        assert app.db.execute('SELECT COUNT(*) FROM payments').fetchone()[0] == 1
         app.db.close()
         root.destroy()
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump({'ok': True, 'version': '1.1', 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons'], 'live_line_sync_verified': False}, f)
+        json.dump({'ok': True, 'version': '1.2', 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons', 'pending does not book payment', 'duplicate prevention', 'confirm payment exactly once'], 'live_line_sync_verified': False}, f)
 
 if __name__=='__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--self-test':
