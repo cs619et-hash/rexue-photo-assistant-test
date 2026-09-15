@@ -50,6 +50,47 @@ async function readLimited(request) {
   return result;
 }
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 200;
+// Short-lived in-memory profile cache; no message contents or credentials stored.
+const profiles = new Map();
+async function addNames(messages, env) {
+  const token = String(env.LINE_CHANNEL_ACCESS_TOKEN || '').trim();
+  const ids = [...new Set(messages.map(m => m.sender_id).filter(id => /^U[0-9a-f]{32}$/i.test(id || '')))];
+  const names = new Map();
+  const pending = [];
+  for (const id of ids) {
+    const cached = profiles.get(id);
+    if (cached && cached.until > Date.now()) names.set(id, cached);
+    else pending.push(id);
+  }
+  // Bound request duration and subrequests. Further names load on the next sync.
+  const work = token ? pending.slice(0, 20) : [];
+  let cursor = 0;
+  await Promise.all(Array.from({length: Math.min(4, work.length)}, async () => {
+    while (cursor < work.length) {
+      const id = work[cursor++];
+      let result = {name: '', state: '暫時無法取得名稱'};
+      try {
+        const r = await fetch('https://api.line.me/v2/bot/profile/' + encodeURIComponent(id), {
+          headers: {Authorization: 'Bearer ' + token}, redirect: 'error',
+          signal: AbortSignal.timeout(2000)
+        });
+        if (r.ok) {
+          const p = await r.json();
+          if (p.userId === id && typeof p.displayName === 'string' && p.displayName.trim())
+            result = {name: p.displayName, state: 'LINE 暱稱'};
+        } else if (r.status === 401 || r.status === 403) result.state = '姓名讀取授權未通過';
+        else if (r.status === 404) result.state = 'LINE 未提供此用戶名稱';
+      } catch {}
+      result.until = Date.now() + (result.name ? 15 * 60 * 1000 : 30 * 1000);
+      if (profiles.size >= 1000) profiles.delete(profiles.keys().next().value);
+      profiles.set(id, result); names.set(id, result);
+    }
+  }));
+  return messages.map(m => ({...m,
+    display_name: names.get(m.sender_id)?.name || '',
+    name_status: !m.sender_id ? '缺少用戶識別碼' : !token ? '尚未設定姓名讀取授權' : names.get(m.sender_id)?.state || '下次同步補取名稱'
+  }));
+}
 export default {
     async fetch(request, env) {
       const path = new URL(request.url).pathname;
@@ -64,12 +105,12 @@ export default {
         try {
           await setup(env.DB);
           const rows = await env.DB.prepare(`
-            SELECT message_key, text_content, sent_at, received_at, revoked
+            SELECT message_key, sender_id, text_content, sent_at, received_at, revoked
             FROM line_messages_v1
             WHERE revoked = 0 AND text_content IS NOT NULL AND expires_at > ?
             ORDER BY received_at DESC LIMIT 200
           `).bind(Date.now()).all();
-          return new Response(JSON.stringify({ version: "1.1", messages: rows.results || [] }), {
+          return new Response(JSON.stringify({ version: "1.3", messages: await addNames(rows.results || [], env) }), {
             headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
           });
         } catch {
@@ -77,7 +118,7 @@ export default {
         }
       }
     if (path === '/' && request.method === 'GET') {
-      return response('熱血少年：訊息接收程式 v1.1 已部署（含受保護的訊息 API）。此頁不代表 EXE 已完成同步。');
+      return response('熱血少年：訊息接收程式 v1.3 已部署（含受保護的訊息 API）。此頁不代表 EXE 已完成同步。');
     }
     if (path !== '/webhook') return response('Not found', 404);
     if (request.method !== 'POST') return response('Method not allowed', 405);

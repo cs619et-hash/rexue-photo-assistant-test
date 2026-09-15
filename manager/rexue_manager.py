@@ -123,7 +123,7 @@ def split_team_player(value):
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title('熱血少年｜拍攝工作管理 v1.2')
+        self.root.title('熱血少年｜拍攝工作管理 v1.3')
         self.root.geometry('1180x720')
         self.root.minsize(1000, 620)
         self.db = sqlite3.connect(DB_PATH)
@@ -193,7 +193,7 @@ class App:
         ttk.Button(connection_bar, text='LINE 金鑰設定', command=self.reset_line_token).pack(side='left')
         ttk.Button(connection_bar, text='雲端修復說明', command=self.cloud_help).pack(side='left', padx=8)
         ttk.Button(connection_bar, text='待確認收款', command=self.show_payment_drafts).pack(side='left', padx=8)
-        ttk.Label(connection_bar, text='  v1.2｜LINE 預約與收款').pack(side='left')
+        ttk.Label(connection_bar, text='  v1.3｜LINE 家長名稱').pack(side='left')
 
         cards = ttk.Frame(self.root, padding=(16, 0)); cards.pack(fill='x')
         self.stats = {}
@@ -220,7 +220,7 @@ class App:
         win = tk.Toplevel(self.root)
         win.title('雲端訊息 API 修復')
         win.geometry('640x350')
-        ttk.Label(win, text='程式已內附相符的 Worker v1.1。', padding=16).pack(anchor='w')
+        ttk.Label(win, text='程式已內附相符的 Worker v1.3。', padding=16).pack(anchor='w')
         ttk.Label(win, text='若連線顯示 404，代表線上網址沒有訊息讀取功能。\n\n1. 按下方按鈕，複製內附程式並開啟 Cloudflare。\n2. 登入後進入 rexue-line → Edit code → 最新版本。\n3. 全選程式碼後貼上，按 Deploy。\n4. 回本程式，使用原有金鑰同步。\n\n這個程式不會自行變更雲端密鑰或移除驗證。', padding=16).pack(anchor='w')
         def copy_worker():
             base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
@@ -231,7 +231,7 @@ class App:
             self.root.clipboard_clear()
             self.root.clipboard_append(content)
             webbrowser.open('https://dash.cloudflare.com')
-            messagebox.showinfo('已複製', '完整 Worker 程式已複製，可以貼入 Cloudflare。', parent=win)
+            messagebox.showinfo('已複製', '完整 Worker 程式已複製，可以貼入 Cloudflare。姓名功能另需在雲端設定 LINE_CHANNEL_ACCESS_TOKEN。', parent=win)
         ttk.Button(win, text='複製修復程式並開啟 Cloudflare', command=copy_worker).pack(pady=8)
 
     def sync_line(self):
@@ -293,13 +293,13 @@ class App:
     def show_line_messages(self, messages):
         win = tk.Toplevel(self.root); win.title('LINE 訊息｜選取後建立紀錄'); win.geometry('900x580')
         bar = ttk.Frame(win, padding=8); bar.pack(fill='x')
-        tree = self.tree(win, ['時間', '訊息內容'], [160, 650])
+        tree = self.tree(win, ['時間', '家長名稱', '訊息內容'], [150, 210, 530])
         items = {}
         for item in messages:
             ts = item.get('received_at') or item.get('sent_at') or 0
             try: time_text = datetime.fromtimestamp(int(ts) / 1000).strftime('%Y-%m-%d %H:%M')
             except Exception: time_text = str(ts)
-            iid = tree.insert('', 'end', values=(time_text, item.get('text_content', '')))
+            iid = tree.insert('', 'end', values=(time_text, item.get('display_name') or item.get('name_status') or '請更新雲端姓名功能', item.get('text_content', '')))
             items[iid] = item
         def selected(action):
             sel = tree.selection()
@@ -428,6 +428,7 @@ class App:
         w,v=self.form('新增預約案件',f,{'status':'新預約','received':'0'}); v['event'].set(labels[0])
         w.line_item = line_item
         if line_item:
+            v['contact'].set(line_item.get('display_name') or '')
             ttk.Label(w,text=str(line_item.get('text_content',''))[:700],wraplength=430).grid(row=len(f)+1,column=0,columnspan=2,padx=12,pady=8)
         ttk.Button(w,text='儲存',command=lambda:self.save_case(w,v,events,labels)).grid(row=len(f),column=1,pady=12,sticky='e')
     def save_case(self,w,v,events,labels):
@@ -664,7 +665,7 @@ def self_test(output_path):
         app.db.close()
         root.destroy()
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump({'ok': True, 'version': '1.2', 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons', 'pending does not book payment', 'duplicate prevention', 'confirm payment exactly once'], 'live_line_sync_verified': False}, f)
+        json.dump({'ok': True, 'version': '1.3', 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons', 'pending does not book payment', 'duplicate prevention', 'confirm payment exactly once'], 'live_line_sync_verified': False}, f)
 
 if __name__=='__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--self-test':
