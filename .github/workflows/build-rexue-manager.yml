@@ -1,0 +1,47 @@
+name: Build Rexue Manager PRO
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["rexue-manager-pro"]
+    paths:
+      - "manager_pro/**"
+      - ".github/workflows/build-rexue-manager.yml"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        shell: powershell
+        run: pip install -r manager_pro/requirements.txt
+      - name: Build EXE
+        shell: powershell
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" manager_pro/app.py
+      - name: Prepare package
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist/RexueManagerPRO.exe package/RexueManagerPRO.exe
+          Set-Content -Path package/README.txt -Encoding UTF8 -Value @"
+          熱血少年｜拍攝工作管理中心 PRO
+
+          1. 雙擊 RexueManagerPRO.exe
+          2. 第一次進入「系統設定」填入既有 LINE Worker API / Token 與 Google 同步端點。
+          3. 儲存後按「全部同步」。
+
+          本版資料預設儲存在：%APPDATA%\RexueManager\
+          "@
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: RexueManagerPRO-Windows
+          path: package/*
+          if-no-files-found: error
