@@ -24,30 +24,34 @@ jobs:
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials manager_pro/app_v3.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials manager_pro/app_v4.py
       - name: Prepare package
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item dist/RexueManagerPRO.exe package/RexueManagerPRO.exe
           Set-Content -Path package/README.txt -Encoding UTF8 -Value @"
-          熱血少年｜拍攝工作管理中心 PRO v3
+          熱血少年｜拍攝工作管理中心 PRO v4
 
-          修正：
-          - Google 授權改成背景執行，不會再像當機。
-          - 同步改成背景執行，首頁會顯示目前進度。
-          - Google 授權完成後會自動測試 Drive 與 Sheets。
-          - 發生錯誤會跳出明確訊息並寫入 %APPDATA%\RexueManager\rexue_manager.log
+          本版修正 database is locked：
+          - SQLite 啟用 WAL + 30 秒 busy timeout。
+          - Google 網路讀取期間完全不持有 SQLite 寫入鎖。
+          - 每份預約表使用短交易，寫完立即 commit / close。
+          - 手動同步與自動同步禁止重疊執行。
+          - Google 授權、同步都在背景執行，介面不會假死。
+          - 收款寫入 Google Sheets 時不再長時間佔住本機資料庫。
 
-          第一次使用：
+          使用：
           1. client_secret.json 與 RexueManagerPRO.exe 放同一資料夾。
-          2. 開啟 EXE → 連線設定 → 連接 Google 帳號。
-          3. 在瀏覽器完成一次 Google 授權。
-          4. 回到程式等候「Google 授權與連線測試成功」。
+          2. 直接開啟 EXE。既有 Google Token / 本機資料庫都會沿用。
+          3. 按「全部同步」。
+
+          本機資料：%APPDATA%\RexueManager\
+          錯誤紀錄：%APPDATA%\RexueManager\rexue_manager.log
           "@
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
-          name: RexueManagerPRO-Windows-v3
+          name: RexueManagerPRO-Windows-v4
           path: package/*
           if-no-files-found: error
