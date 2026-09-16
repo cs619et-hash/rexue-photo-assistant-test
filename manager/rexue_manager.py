@@ -1,5 +1,8 @@
 import csv
+import glob
+import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -25,6 +28,12 @@ GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/calendar.readonly',
 ]
 LINE_API_URL = 'https://rexue-line.cs619et.workers.dev/api/messages'
+FINANCE_SHEET_ID = '1Vy2tyBoxpIrAPTAWnFuemPLYje2Ip8ZvLV1GqRM-fU8'
+APP_VERSION = '1.4'
+
+LOG_PATH = os.path.join(APP_DIR, 'rexue_manager.log')
+logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
+                    format='%(asctime)s %(levelname)s %(message)s', encoding='utf-8')
 
 
 class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
@@ -38,7 +47,7 @@ def fetch_line_messages(token, opener=None):
         raise ValueError('金鑰格式無效，請使用 LINE 金鑰設定更新。')
     request = urllib.request.Request(LINE_API_URL, headers={
         'Authorization': f'Bearer {token}',
-        'User-Agent': 'RexueManager/1.1',
+        'User-Agent': 'RexueManager/1.4',
         'Accept': 'application/json',
     })
     opener = opener or urllib.request.build_opener(NoCredentialRedirect())
@@ -123,17 +132,20 @@ def split_team_player(value):
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title('熱血少年｜拍攝工作管理 v1.3')
+        self.root.title(f'熱血少年｜拍攝工作管理 v{APP_VERSION}')
         self.root.geometry('1180x720')
         self.root.minsize(1000, 620)
-        self.db = sqlite3.connect(DB_PATH)
+        self.db = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.init_db()
         self.build_ui()
         self.refresh()
         self.line_busy = False
         self.line_results = queue.Queue()
+        self.google_results = queue.Queue()
+        self.google_busy = False
         self.root.after(100, self.poll_line_result)
+        self.root.after(150, self.poll_google_result)
 
     def init_db(self):
         self.db.executescript('''
@@ -165,6 +177,11 @@ class App:
             id INTEGER PRIMARY KEY, message_key TEXT UNIQUE NOT NULL,
             case_id INTEGER NOT NULL, amount REAL NOT NULL, paid_date TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT '待確認', created_at TEXT NOT NULL)""")
+        for name, definition in [('source_text','TEXT'), ('google_synced_at','TEXT')]:
+            try:
+                self.db.execute(f'ALTER TABLE line_payment_drafts ADD COLUMN {name} {definition}')
+            except sqlite3.OperationalError:
+                pass
         for name, definition in [
             ('source_key', 'TEXT'), ('source_name', 'TEXT'),
             ('source_row', 'INTEGER'), ('last_synced_at', 'TEXT')
@@ -193,7 +210,7 @@ class App:
         ttk.Button(connection_bar, text='LINE 金鑰設定', command=self.reset_line_token).pack(side='left')
         ttk.Button(connection_bar, text='雲端修復說明', command=self.cloud_help).pack(side='left', padx=8)
         ttk.Button(connection_bar, text='待確認收款', command=self.show_payment_drafts).pack(side='left', padx=8)
-        ttk.Label(connection_bar, text='  v1.3｜LINE 家長名稱').pack(side='left')
+        ttk.Label(connection_bar, text=f'  v{APP_VERSION}｜LINE＋Google 自動整合').pack(side='left')
 
         cards = ttk.Frame(self.root, padding=(16, 0)); cards.pack(fill='x')
         self.stats = {}
@@ -327,13 +344,13 @@ class App:
         def save():
             try:
                 cid = int(v['case'].get().split('｜')[0])
-                self.create_payment_draft(item['message_key'],cid,v['amount'].get(),v['date'].get())
+                self.create_payment_draft(item['message_key'],cid,v['amount'].get(),v['date'].get(),item.get('text_content',''))
             except (ValueError, sqlite3.IntegrityError) as exc:
                 return messagebox.showwarning('未儲存',str(exc),parent=w)
             w.destroy(); messagebox.showinfo('已登記','已加入待確認收款，案件已收金額尚未變動。')
         ttk.Button(w,text='加入待確認收款',command=save).grid(row=4,column=1,pady=12)
 
-    def create_payment_draft(self,key,cid,amount,paid_date):
+    def create_payment_draft(self,key,cid,amount,paid_date,source_text=''):
         import math
         amount = float(amount)
         if not math.isfinite(amount) or amount <= 0 or round(amount,2) != amount:
@@ -344,8 +361,8 @@ class App:
         if self.db.execute('SELECT id FROM line_payment_drafts WHERE message_key=?',(key,)).fetchone():
             raise ValueError('這則訊息已登記過收款，不能重複加入。')
         with self.db:
-            self.db.execute('INSERT INTO line_payment_drafts(message_key,case_id,amount,paid_date,created_at) VALUES(?,?,?,?,?)',
-                (key,cid,amount,paid_date,datetime.now().isoformat()))
+            self.db.execute('INSERT INTO line_payment_drafts(message_key,case_id,amount,paid_date,created_at,source_text) VALUES(?,?,?,?,?,?)',
+                (key,cid,amount,paid_date,datetime.now().isoformat(),str(source_text or '')[:2000]))
 
     def confirm_payment_draft(self,did):
         with self.db:
@@ -465,13 +482,16 @@ class App:
             from google.oauth2.credentials import Credentials
             from google_auth_oauthlib.flow import InstalledAppFlow
         except ImportError:
-            messagebox.showerror('Google 連線尚未安裝', '請重新執行 Windows 打包檔，讓它安裝 Google 連線元件。')
-            return None
+            raise RuntimeError('Google 連線元件缺少，請使用完整新版 EXE。')
         token_path = os.path.join(APP_DIR, 'google_token.json')
         credential_candidates = [
             os.path.join(application_dir(), 'credentials.json'),
             os.path.join(APP_DIR, 'credentials.json'),
         ]
+        for folder in (os.path.join(os.path.expanduser('~'), 'Downloads'),
+                       os.path.join(os.path.expanduser('~'), 'Desktop')):
+            credential_candidates.extend(glob.glob(os.path.join(folder, 'client_secret_*.json')))
+            credential_candidates.extend(glob.glob(os.path.join(folder, 'credentials*.json')))
         credential_path = next((p for p in credential_candidates if os.path.exists(p)), None)
         creds = None
         if os.path.exists(token_path):
@@ -484,38 +504,52 @@ class App:
                 creds.refresh(Request())
             elif not creds or not creds.valid:
                 if not credential_path:
-                    messagebox.showinfo(
-                        '第一次連結 Google',
-                        '請將 Google OAuth「桌面應用程式」憑證檔命名為 credentials.json，\n'
-                        '放在 EXE 同一個資料夾，再按一次「同步 Google 資料」。\n\n'
-                        '只需設定一次；之後會在瀏覽器登入一次，EXE 就能自動同步。'
-                    )
-                    return None
+                    raise RuntimeError('找不到已下載的 Google 登入檔。請保留 client_secret JSON 在「下載」資料夾。')
+                if os.path.abspath(credential_path) != os.path.abspath(os.path.join(APP_DIR, 'credentials.json')):
+                    shutil.copy2(credential_path, os.path.join(APP_DIR, 'credentials.json'))
+                    credential_path = os.path.join(APP_DIR, 'credentials.json')
                 flow = InstalledAppFlow.from_client_secrets_file(credential_path, GOOGLE_SCOPES)
                 creds = flow.run_local_server(port=0, prompt='consent')
             with open(token_path, 'w', encoding='utf-8') as f:
                 f.write(creds.to_json())
             return creds
         except Exception as exc:
-            messagebox.showerror('Google 連線失敗', f'{exc}\n\n請重新登入或把錯誤畫面傳給我。')
-            return None
+            logging.exception('Google authentication failed')
+            raise RuntimeError(f'Google 登入失敗：{exc}') from exc
 
     def sync_google(self):
-        creds = self.google_credentials()
-        if not creds:
+        if self.google_busy:
             return
+        self.google_busy = True
+        self.sync_status.config(text='正在準備 Google 登入與同步，視窗仍可操作…')
+        def work():
+            try:
+                creds = self.google_credentials()
+                sheets_count, case_count = self.sync_form_sheets(creds)
+                calendar_count = self.sync_calendar(creds)
+                finance_count = self.sync_pending_finance(creds)
+                self.google_results.put((True,(sheets_count,case_count,calendar_count,finance_count)))
+            except Exception as exc:
+                logging.exception('Google sync failed')
+                self.google_results.put((False,str(exc)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def poll_google_result(self):
         try:
-            from googleapiclient.discovery import build
-            self.sync_status.config(text='正在同步 Google 預約表單與日曆…')
-            self.root.update_idletasks()
-            sheets_count, case_count = self.sync_form_sheets(creds)
-            calendar_count = self.sync_calendar(creds)
-            self.refresh()
-            self.sync_status.config(text=f'最後同步：{datetime.now():%Y-%m-%d %H:%M}｜表單 {sheets_count} 份、案件 {case_count} 筆、日曆 {calendar_count} 筆')
-            messagebox.showinfo('同步完成', f'已自動匯入 {case_count} 筆預約案件。\n已讀取 {sheets_count} 份預約表單與 {calendar_count} 筆日曆行程。')
-        except Exception as exc:
-            self.sync_status.config(text='Google 同步失敗，資料未被刪除')
-            messagebox.showerror('同步失敗', f'{exc}\n\n原有資料沒有被刪除，請把錯誤畫面傳給我。')
+            success, result = self.google_results.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self.google_busy = False
+            if success:
+                sheets_count, case_count, calendar_count, finance_count = result
+                self.refresh()
+                self.sync_status.config(text=f'最後同步：{datetime.now():%Y-%m-%d %H:%M}｜表單 {sheets_count}、案件 {case_count}、拍攝行程 {calendar_count}、收款 {finance_count}')
+                messagebox.showinfo('同步完成',f'預約案件 {case_count} 筆\n拍攝行程 {calendar_count} 筆\n新增收支紀錄 {finance_count} 筆')
+            else:
+                self.sync_status.config(text='Google 同步失敗，原有資料未刪除')
+                messagebox.showerror('同步失敗',f'{result}\n\n詳細紀錄：{LOG_PATH}')
+        self.root.after(150, self.poll_google_result)
 
     def sync_form_sheets(self, creds):
         from googleapiclient.discovery import build
@@ -538,13 +572,17 @@ class App:
             tabs = sorted(meta.get('sheets', []), key=lambda x: x.get('properties', {}).get('index', 0))
             if not tabs:
                 continue
-            tab = tabs[0].get('properties', {}).get('title', '')
+            response_tab = next((x for x in tabs if '表單回覆' in x.get('properties', {}).get('title','')), tabs[0])
+            tab = response_tab.get('properties', {}).get('title', '')
             values = sheets.spreadsheets().values().get(
                 spreadsheetId=file['id'], range=f"'{tab}'!A1:Z2000", valueRenderOption='FORMATTED_VALUE'
             ).execute().get('values', [])
             if len(values) < 2:
                 continue
             headers = values[0]
+            header_text = ' '.join(str(x or '') for x in headers)
+            if '比賽日期' not in header_text or not any(x in header_text for x in ('隊伍名稱','球員姓名','比賽隊伍')):
+                continue
             for row_number, row in enumerate(values[1:], start=2):
                 if not any(str(x).strip() for x in row):
                     continue
@@ -556,7 +594,7 @@ class App:
     @staticmethod
     def is_booking_sheet(name):
         text = str(name or '')
-        return '預約' in text and any(x in text for x in ('回覆', '表單', '賽事'))
+        return ('預約' in text and any(x in text for x in ('回覆', '表單', '賽事'))) or ('回覆' in text and any(x in text for x in ('盃','足球','排球','籃球','聯賽')))
 
     def import_form_row(self, file, row_number, file_name, headers, row):
         date = normalise_date(first_value(row, headers, ['比賽日期']))
@@ -572,7 +610,9 @@ class App:
         all_text = ' '.join(str(x or '') for x in row)
         event_name = clean_event_name(file_name)
         stage = '總決賽' if '總決賽' in (event_name + all_text) else '分區賽'
-        source_key = f"{file.get('id')}:{row_number}"
+        timestamp = first_value(row, headers, ['時間戳記'])
+        identity = timestamp or hashlib.sha256(json.dumps(row,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()[:24]
+        source_key = f"google:{file.get('id')}:{identity}"
         now = datetime.now().isoformat()
         event = self.db.execute('SELECT id FROM events WHERE name=?', (event_name,)).fetchone()
         if event:
@@ -582,8 +622,12 @@ class App:
             cur = self.db.execute('INSERT INTO events(name,stage,start_date,end_date,venue,notes,created_at) VALUES(?,?,?,?,?,?,?)', (event_name, stage, date, date, venue, '來源：Google 預約表單', now))
             event_id = cur.lastrowid
         existing = self.db.execute('SELECT id FROM cases WHERE source_key=?', (source_key,)).fetchone()
+        if not existing:
+            existing = self.db.execute('SELECT id FROM cases WHERE source_name=? AND source_row=?', (file_name,row_number)).fetchone()
+            if existing:
+                self.db.execute('UPDATE cases SET source_key=? WHERE id=?',(source_key,existing['id']))
         if existing:
-            self.db.execute('''UPDATE cases SET event_id=?,date=?,time=?,team=?,player=?,number=?,grade=?,opponent=?,contact=?,source_name=?,source_row=?,last_synced_at=? WHERE source_key=?''', (event_id,date,time,team,player,number,grade,opponent,contact,file_name,row_number,now,source_key))
+            self.db.execute('''UPDATE cases SET event_id=?,date=?,time=?,team=?,player=?,number=?,grade=?,opponent=?,contact=?,source_name=?,source_row=?,last_synced_at=? WHERE id=?''', (event_id,date,time,team,player,number,grade,opponent,contact,file_name,row_number,now,existing['id']))
         else:
             self.db.execute('''INSERT INTO cases(event_id,date,time,team,player,number,grade,opponent,contact,quoted,received,status,notes,created_at,source_key,source_name,source_row,last_synced_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (event_id,date,time,team,player,number,grade,opponent,contact,0,0,'新預約','來源：Google 預約表單',now,source_key,file_name,row_number,now))
         return True
@@ -591,20 +635,64 @@ class App:
     def sync_calendar(self, creds):
         from googleapiclient.discovery import build
         service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
+        calendar_id = CALENDAR_ID
+        if calendar_id == 'primary':
+            choices = service.calendarList().list().execute().get('items', [])
+            dedicated = next((c for c in choices if any(k in (c.get('summary','') + c.get('description','')) for k in ('拍攝','熱血少年'))), None)
+            if not dedicated:
+                logging.info('No dedicated shooting calendar found; personal primary calendar skipped')
+                return 0
+            calendar_id = dedicated['id']
         year = datetime.now().year
-        result = service.events().list(
-            calendarId=CALENDAR_ID,
-            timeMin=f'{year}-01-01T00:00:00+08:00',
-            timeMax=f'{year + 1}-01-01T00:00:00+08:00',
-            singleEvents=True, orderBy='startTime', maxResults=2500, showDeleted=False
-        ).execute()
+        events, page_token = [], None
+        while True:
+            result = service.events().list(
+                calendarId=calendar_id, timeMin=f'{year}-01-01T00:00:00+08:00',
+                timeMax=f'{year + 1}-01-01T00:00:00+08:00', singleEvents=True,
+                orderBy='startTime', maxResults=2500, showDeleted=False,
+                pageToken=page_token).execute()
+            events.extend(result.get('items', []))
+            page_token = result.get('nextPageToken')
+            if not page_token:
+                break
         now = datetime.now().isoformat()
-        for event in result.get('items', []):
+        for event in events:
             start = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date', '')
             end = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date', '')
-            self.db.execute('''INSERT INTO calendar_events(google_event_id,summary,start_at,end_at,location,calendar_id,synced_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(google_event_id) DO UPDATE SET summary=excluded.summary,start_at=excluded.start_at,end_at=excluded.end_at,location=excluded.location,synced_at=excluded.synced_at''', (event.get('id'), event.get('summary', ''), start, end, event.get('location', ''), CALENDAR_ID, now))
+            self.db.execute('''INSERT INTO calendar_events(google_event_id,summary,start_at,end_at,location,calendar_id,synced_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(google_event_id) DO UPDATE SET summary=excluded.summary,start_at=excluded.start_at,end_at=excluded.end_at,location=excluded.location,synced_at=excluded.synced_at''', (event.get('id'), event.get('summary', ''), start, end, event.get('location', ''), calendar_id, now))
         self.db.commit()
-        return len(result.get('items', []))
+        return len(events)
+
+    def sync_pending_finance(self, creds):
+        """Append confirmed LINE payments to the current-year income sheet exactly once."""
+        from googleapiclient.discovery import build
+        service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
+        tab = f'{datetime.now().year}年'
+        existing = service.spreadsheets().values().get(
+            spreadsheetId=FINANCE_SHEET_ID, range=f"'{tab}'!A:F",
+            valueRenderOption='FORMATTED_VALUE').execute().get('values', [])
+        known = {tuple(str(x or '').strip() for x in (row + [''] * 6)[:6]) for row in existing[1:]}
+        rows = self.db.execute('''SELECT d.id,d.amount,d.paid_date,d.source_text,c.team,c.player,c.contact,e.name event_name
+            FROM line_payment_drafts d JOIN cases c ON c.id=d.case_id
+            LEFT JOIN events e ON e.id=c.event_id
+            WHERE d.state='已入帳' AND d.google_synced_at IS NULL ORDER BY d.id''').fetchall()
+        added = 0
+        for r in rows:
+            tails = re.findall(r'(?<!\d)(\d{5})(?!\d)', r['source_text'] or '')
+            values = [r['event_name'] or '', r['paid_date'] or '', r['team'] or '',
+                      r['contact'] or r['player'] or '', str(int(r['amount']) if float(r['amount']).is_integer() else r['amount']),
+                      tails[-1] if tails else 'LINE待核對']
+            key = tuple(str(x).strip() for x in values)
+            if key not in known:
+                service.spreadsheets().values().append(
+                    spreadsheetId=FINANCE_SHEET_ID, range=f"'{tab}'!A:F",
+                    valueInputOption='USER_ENTERED', insertDataOption='INSERT_ROWS',
+                    body={'values':[values]}).execute()
+                known.add(key); added += 1
+            self.db.execute('UPDATE line_payment_drafts SET google_synced_at=? WHERE id=?',
+                            (datetime.now().isoformat(),r['id']))
+            self.db.commit()
+        return added
 
     def backup(self):
         target=filedialog.asksaveasfilename(title='備份資料',initialfile=f'rexue_backup_{datetime.now():%Y%m%d_%H%M}.db',defaultextension='.db',filetypes=[('Database','*.db')])
@@ -618,7 +706,7 @@ def self_test(output_path):
         pass
     class FakeOpener:
         def open(self, request, timeout):
-            assert request.get_header('User-agent') == 'RexueManager/1.1'
+            assert request.get_header('User-agent') == 'RexueManager/1.4'
             assert request.get_header('Authorization') == 'Bearer local-test'
             return FakeResponse(b'{"messages": [{"text_content": "test", "received_at": 1}]}')
     with tempfile.TemporaryDirectory() as tmp:
@@ -665,7 +753,7 @@ def self_test(output_path):
         app.db.close()
         root.destroy()
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump({'ok': True, 'version': '1.3', 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons', 'pending does not book payment', 'duplicate prevention', 'confirm payment exactly once'], 'live_line_sync_verified': False}, f)
+        json.dump({'ok': True, 'version': APP_VERSION, 'tests': ['GUI startup', 'SQLite persistence', 'cancel preserves token', 'token replacement', 'message display', 'settings buttons', 'pending does not book payment', 'duplicate prevention', 'confirm payment exactly once', 'Google sync queue'], 'live_line_sync_verified': False}, f)
 
 if __name__=='__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--self-test':

@@ -7,7 +7,7 @@ exec(compile(ast.Module(body=nodes,type_ignores=[]),'client','exec'),ns)
 class Opener:
  def __init__(self,code=200,body=b'{"messages":[]}'): self.code,self.body=code,body
  def open(self,req,timeout):
-  assert req.get_header('User-agent')=='RexueManager/1.1'
+  assert req.get_header('User-agent')=='RexueManager/1.4'
   assert req.get_header('Authorization')=='Bearer test-token'
   if self.code!=200: raise urllib.error.HTTPError(req.full_url,self.code,'error',{},io.BytesIO(self.body))
   return io.BytesIO(self.body)

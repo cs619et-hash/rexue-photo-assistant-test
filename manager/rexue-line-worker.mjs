@@ -63,24 +63,32 @@ async function addNames(messages, env) {
     else pending.push(id);
   }
   // Bound request duration and subrequests. Further names load on the next sync.
-  const work = token ? pending.slice(0, 20) : [];
+  const work = token ? pending.slice(0, 8) : [];
   let cursor = 0;
   await Promise.all(Array.from({length: Math.min(4, work.length)}, async () => {
     while (cursor < work.length) {
       const id = work[cursor++];
       let result = {name: '', state: '暫時無法取得名稱'};
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
       try {
         const r = await fetch('https://api.line.me/v2/bot/profile/' + encodeURIComponent(id), {
-          headers: {Authorization: 'Bearer ' + token}, redirect: 'error',
-          signal: AbortSignal.timeout(2000)
+          headers: {Authorization: 'Bearer ' + token}, redirect: 'manual',
+          signal: controller.signal
         });
         if (r.ok) {
           const p = await r.json();
+          result.state = 'LINE 回傳姓名格式不符';
           if (p.userId === id && typeof p.displayName === 'string' && p.displayName.trim())
             result = {name: p.displayName, state: 'LINE 暱稱'};
         } else if (r.status === 401 || r.status === 403) result.state = '姓名讀取授權未通過';
         else if (r.status === 404) result.state = 'LINE 未提供此用戶名稱';
-      } catch {}
+        else if (r.status === 429) result.state = 'LINE 查詢頻率受限，稍後重試';
+        else result.state = 'LINE 姓名查詢 HTTP ' + r.status;
+        if (!r.ok && r.body) await r.body.cancel();
+      } catch (error) {
+        result.state = controller.signal.aborted ? '姓名查詢超過 5 秒，請重試' : error instanceof SyntaxError ? 'LINE 回應不是有效 JSON' : '姓名連線或執行錯誤：' + (['TypeError','Error','AbortError'].includes(error?.name) ? error.name : 'UnknownError');
+      } finally { clearTimeout(timer); }
       result.until = Date.now() + (result.name ? 15 * 60 * 1000 : 30 * 1000);
       if (profiles.size >= 1000) profiles.delete(profiles.keys().next().value);
       profiles.set(id, result); names.set(id, result);
@@ -110,7 +118,7 @@ export default {
             WHERE revoked = 0 AND text_content IS NOT NULL AND expires_at > ?
             ORDER BY received_at DESC LIMIT 200
           `).bind(Date.now()).all();
-          return new Response(JSON.stringify({ version: "1.3", messages: await addNames(rows.results || [], env) }), {
+          return new Response(JSON.stringify({ version: "1.3.1", messages: await addNames(rows.results || [], env) }), {
             headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
           });
         } catch {
@@ -118,7 +126,7 @@ export default {
         }
       }
     if (path === '/' && request.method === 'GET') {
-      return response('熱血少年：訊息接收程式 v1.3 已部署（含受保護的訊息 API）。此頁不代表 EXE 已完成同步。');
+      return response('熱血少年：訊息接收程式 v1.3.1 已部署（含受保護的訊息 API）。此頁不代表 EXE 已完成同步。');
     }
     if (path !== '/webhook') return response('Not found', 404);
     if (request.method !== 'POST') return response('Method not allowed', 405);

@@ -29,24 +29,24 @@ jobs:
         run: python rexue_manager.py --self-test source-test.json
       - name: Build Windows EXE
         working-directory: manager
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name RexueManager_v1.3 --icon ../assets/rexue_app_icon.ico --add-data 'rexue-line-worker.mjs;.' rexue_manager.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name RexueManager_v1.4 --icon ../assets/rexue_app_icon.ico --add-data 'rexue-line-worker.mjs;.' rexue_manager.py
       - name: Test packaged Windows EXE
         working-directory: manager
         shell: pwsh
         run: |
           $result = Join-Path $PWD 'exe-test.json'
-          $process = Start-Process -FilePath '.\dist\RexueManager_v1.3.exe' -ArgumentList "--self-test `"$result`"" -PassThru
+          $process = Start-Process -FilePath '.\dist\RexueManager_v1.4.exe' -ArgumentList "--self-test `"$result`"" -PassThru
           if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'EXE test timeout' }
           if ($process.ExitCode -ne 0) { throw "EXE exit code: $($process.ExitCode)" }
           if (-not (Test-Path $result)) { throw 'EXE did not finish tests' }
           $test = Get-Content $result | ConvertFrom-Json
           if (-not $test.ok) { throw 'EXE self-test failed' }
-          Get-FileHash '.\dist\RexueManager_v1.3.exe' -Algorithm SHA256 | Format-List
+          Get-FileHash '.\dist\RexueManager_v1.4.exe' -Algorithm SHA256 | Format-List
       - uses: actions/upload-artifact@v4
         with:
-          name: RexueManager-v1.3-Windows
+          name: RexueManager-v1.4-Windows
           path: |
-            manager/dist/RexueManager_v1.3.exe
+            manager/dist/RexueManager_v1.4.exe
             manager/exe-test.json
             manager/source-test.json
           if-no-files-found: error
