@@ -741,7 +741,12 @@ class Main(QMainWindow):
                 f.addRow('案件',combo); f.addRow(QLabel(f"金額：{p['amount']}；末五碼：{p['last5'] or ''}\n請核對實際入款。本程式無法查詢銀行。"))
                 buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
                 buttons.accepted.connect(d.accept); buttons.rejected.connect(d.reject); f.addRow(buttons)
-                if d.exec()!=QDialog.DialogCode.Accepted or combo.currentIndex()<0: return
+                self.timer.stop()
+                try:
+                    accepted = d.exec()==QDialog.DialogCode.Accepted and combo.currentIndex()>=0
+                finally:
+                    self.timer.start()
+                if not accepted: return
                 bid=combo.currentData()
                 b = c.execute('SELECT * FROM bookings WHERE id=?', (bid,)).fetchone()
                 if not p['amount'] or p['amount'] != b['amount']:
