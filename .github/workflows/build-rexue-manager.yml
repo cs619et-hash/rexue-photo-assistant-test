@@ -24,7 +24,7 @@ jobs:
       - name: Build EXE
         shell: powershell
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" manager_pro/app.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials manager_pro/app.py
       - name: Prepare package
         shell: powershell
         run: |
@@ -33,11 +33,15 @@ jobs:
           Set-Content -Path package/README.txt -Encoding UTF8 -Value @"
           熱血少年｜拍攝工作管理中心 PRO
 
-          1. 雙擊 RexueManagerPRO.exe
-          2. 第一次進入「系統設定」填入既有 LINE Worker API / Token 與 Google 同步端點。
-          3. 儲存後按「全部同步」。
+          第一次使用：
+          1. 將 client_secret.json 跟 RexueManagerPRO.exe 放在同一個資料夾。
+          2. 雙擊 RexueManagerPRO.exe。
+          3. 進入「連線設定」→「連接 Google 帳號」。
+          4. 瀏覽器登入 Google 後按允許。授權 Token 只保存在你的電腦。
+          5. LINE Worker / Webhook 網址若已設定，按「全部同步」即可。
 
-          本版資料預設儲存在：%APPDATA%\RexueManager\
+          功能：Google 預約表自動掃描、LINE 客戶/訊息同步、匯款候選辨識、確認收款後寫入熱血少年收支表。
+          本機資料：%APPDATA%\RexueManager\
           "@
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
