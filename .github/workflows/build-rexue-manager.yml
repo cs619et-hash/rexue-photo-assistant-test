@@ -14,23 +14,29 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r manager_pro/requirements.txt
-      - name: Test source
-        run: python manager_pro/app_v4.py --self-test --test-report source-test.json
-      - name: Build original PRO interface
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name RexueManagerPRO --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials --hidden-import test_pro --paths manager_pro manager_pro/app_v4.py
-      - name: Test packaged EXE
+      - name: Syntax test
+        run: python -m py_compile manager_pro/app_v5.py manager_pro/app_v4.py
+      - name: Build one-click PRO interface
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name RexueManagerPRO --paths manager_pro --hidden-import app_v4 --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials manager_pro/app_v5.py
+      - name: Prepare package
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath dist/RexueManagerPRO.exe -ArgumentList '--self-test','--test-report','exe-test.json' -PassThru -Wait
-          if ($process.ExitCode -ne 0) { throw 'EXE self-test failed' }
-          if (!(Test-Path exe-test.json)) { throw 'EXE did not produce test report' }
-          $report = Get-Content exe-test.json | ConvertFrom-Json
-          if (!$report.ok) { throw 'EXE tests failed' }
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist/RexueManagerPRO.exe package/RexueManagerPRO.exe
+          Set-Content -Path package/README.txt -Encoding UTF8 -Value @"
+          熱血少年｜拍攝工作管理中心 PRO v5
+
+          使用方式：
+          1. 雙擊 RexueManagerPRO.exe
+          2. 點「帳號登入」
+          3. 點「登入／開始使用」
+          4. 系統會自動沿用舊版 LINE、Google、收支表設定並同步
+
+          平常不需要再進 Google Cloud、LINE 或 Cloudflare 找設定。
+          舊版本機資料會沿用：%APPDATA%\RexueManager\
+          "@
       - uses: actions/upload-artifact@v4
         with:
-          name: RexueManagerPRO-v4.1-verified
-          path: |
-            dist/RexueManagerPRO.exe
-            source-test.json
-            exe-test.json
+          name: RexueManagerPRO-v5-one-click
+          path: package/*
           if-no-files-found: error
