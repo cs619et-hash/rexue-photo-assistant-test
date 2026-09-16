@@ -1,57 +1,36 @@
 name: Build Rexue Manager PRO
-
 on:
   workflow_dispatch:
   push:
-    branches: ["rexue-manager-pro"]
-    paths:
-      - "manager_pro/**"
-      - ".github/workflows/build-rexue-manager.yml"
-
+    branches: [rexue-manager-pro]
+    paths: ['manager_pro/**', '.github/workflows/build-rexue-manager.yml']
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
       - name: Install dependencies
-        shell: powershell
         run: pip install -r manager_pro/requirements.txt
-      - name: Build EXE
-        shell: powershell
+      - name: Test source
+        run: python manager_pro/app_v4.py --self-test --test-report source-test.json
+      - name: Build original PRO interface
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name RexueManagerPRO --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials --hidden-import test_pro --paths manager_pro manager_pro/app_v4.py
+      - name: Test packaged EXE
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name "RexueManagerPRO" --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.oauth2.credentials manager_pro/app_v4.py
-      - name: Prepare package
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item dist/RexueManagerPRO.exe package/RexueManagerPRO.exe
-          Set-Content -Path package/README.txt -Encoding UTF8 -Value @"
-          熱血少年｜拍攝工作管理中心 PRO v4
-
-          本版修正 database is locked：
-          - SQLite 啟用 WAL + 30 秒 busy timeout。
-          - Google 網路讀取期間完全不持有 SQLite 寫入鎖。
-          - 每份預約表使用短交易，寫完立即 commit / close。
-          - 手動同步與自動同步禁止重疊執行。
-          - Google 授權、同步都在背景執行，介面不會假死。
-          - 收款寫入 Google Sheets 時不再長時間佔住本機資料庫。
-
-          使用：
-          1. client_secret.json 與 RexueManagerPRO.exe 放同一資料夾。
-          2. 直接開啟 EXE。既有 Google Token / 本機資料庫都會沿用。
-          3. 按「全部同步」。
-
-          本機資料：%APPDATA%\RexueManager\
-          錯誤紀錄：%APPDATA%\RexueManager\rexue_manager.log
-          "@
-      - name: Upload Windows EXE
-        uses: actions/upload-artifact@v4
+          $process = Start-Process -FilePath dist/RexueManagerPRO.exe -ArgumentList '--self-test','--test-report','exe-test.json' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw 'EXE self-test failed' }
+          if (!(Test-Path exe-test.json)) { throw 'EXE did not produce test report' }
+          $report = Get-Content exe-test.json | ConvertFrom-Json
+          if (!$report.ok) { throw 'EXE tests failed' }
+      - uses: actions/upload-artifact@v4
         with:
-          name: RexueManagerPRO-Windows-v4
-          path: package/*
+          name: RexueManagerPRO-v4.1-verified
+          path: |
+            dist/RexueManagerPRO.exe
+            source-test.json
+            exe-test.json
           if-no-files-found: error

@@ -1,4 +1,4 @@
-import sys, os, sqlite3, json, re, shutil, threading, traceback
+import sys, os, sqlite3, json, re, shutil, threading, traceback, hashlib
 from pathlib import Path
 from datetime import datetime
 import requests
@@ -7,10 +7,11 @@ from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QTableWidget, QTableWidgetItem, QFrame, QLineEdit, QFormLayout,
-    QMessageBox, QHeaderView, QFileDialog, QAbstractItemView
+    QMessageBox, QHeaderView, QFileDialog, QAbstractItemView, QDialog,
+    QDialogButtonBox, QComboBox, QSpinBox
 )
 
-APP_NAME = '熱血少年｜拍攝工作管理中心 PRO'
+APP_NAME = '熱血少年｜拍攝工作管理中心 PRO v4.1'
 DATA_DIR = Path(os.getenv('APPDATA', str(Path.home()))) / 'RexueManager'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB = DATA_DIR / 'rexue_manager.db'
@@ -66,6 +67,11 @@ def ensure_col(cur, table, col, decl):
 
 def init_db():
     with DB_LOCK:
+        backup = DB.with_name('rexue_manager.before-v4.1.db')
+        if DB.exists() and not backup.exists():
+            source = sqlite3.connect(DB, timeout=30); dest = sqlite3.connect(backup)
+            try: source.backup(dest)
+            finally: dest.close(); source.close()
         c = conn(); cur = c.cursor()
         cur.executescript('''
         PRAGMA journal_mode=WAL;
@@ -99,6 +105,9 @@ def init_db():
         ''')
         ensure_col(cur, 'payment_candidates', 'matched_booking_id', 'INTEGER')
         ensure_col(cur, 'payment_candidates', 'display_name', 'TEXT')
+        ensure_col(cur, 'messages', 'source_key', 'TEXT')
+        ensure_col(cur, 'customers', 'custom_name', "TEXT DEFAULT ''")
+        cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS messages_source_key ON messages(source_key)')
         c.commit(); c.close()
 
 
@@ -120,7 +129,9 @@ def load_cfg():
 
 
 def save_cfg(cfg):
-    CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    tmp = CFG.with_suffix('.tmp')
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, CFG)
 
 
 def normalize_date(v):
@@ -145,7 +156,7 @@ def normalize_time(v):
 
 
 def extract_payment(text):
-    text = str(text or '')
+    text = re.sub(r'(?<=\d),(?=\d)', '', str(text or ''))
     amount = None; last5 = None
     for p in [
         r'(?:匯款|轉帳|已付|付款|金額|匯了|轉了)\s*[:：]?\s*(?:NT\$?\s*)?([1-9]\d{2,6})',
@@ -197,7 +208,7 @@ def google_creds(interactive=False):
     if not cf:
         raise RuntimeError('找不到 Google OAuth 憑證 client_secret.json')
     flow = InstalledAppFlow.from_client_secrets_file(str(cf), SCOPES)
-    creds = flow.run_local_server(port=0, open_browser=True, authorization_prompt_message='')
+    creds = flow.run_local_server(port=0, open_browser=True, authorization_prompt_message='', timeout_seconds=180)
     TOKEN_FILE.write_text(creds.to_json(), encoding='utf-8')
     return creds
 
@@ -242,7 +253,8 @@ def parse_form_row(title, sid, rownum, headers, row):
     nums = ','.join(sorted(set(re.findall(r'(?<!\d)(\d{1,2})\s*號?(?!\d)', raw)), key=lambda z: int(z))) if raw else ''
     typ = '指定球員' if any(k in raw for k in ['指定', '號', '球員', '主要', '多拍']) else '團體拍攝'
     return {
-        'source_key': f'{sid}:{rownum}:{ts or "|".join(map(str,row))}',
+        'source_key': f'{sid}:v41:' + hashlib.sha256(str(ts or json.dumps(row,ensure_ascii=False)).encode()).hexdigest(),
+        'legacy_suffix': ':' + str(ts or '|'.join(map(str,row))),
         'event_name': clean_event_title(title),
         'event_date': normalize_date(event_date),
         'start_time': normalize_time(start_time),
@@ -292,6 +304,8 @@ class Main(QMainWindow):
         self.auth_busy = False
         self.worker = None
         self.auth_worker = None
+        self.payment_worker = None
+        self.payment_busy = False
         self.setWindowTitle(APP_NAME)
         self.resize(1420, 860)
 
@@ -323,11 +337,7 @@ class Main(QMainWindow):
     def startup(self):
         find_client_secret()
         self.refresh_all()
-        try:
-            c = google_creds(False)
-            self.google_state.setText('Google：已授權' if c else 'Google：待授權')
-        except Exception:
-            self.google_state.setText('Google：待授權')
+        self.google_state.setText('Google：待同步驗證' if TOKEN_FILE.exists() else 'Google：待授權')
         QTimer.singleShot(1000, self.auto_sync)
 
     def dashboard(self):
@@ -346,14 +356,22 @@ class Main(QMainWindow):
         t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         l.addWidget(t); return w, t, l
 
     def clients_page(self):
-        self.clientw, self.clientt, _ = self.table_page(['LINE姓名','LINE User ID','備註','建立時間'])
+        self.clientw, self.clientt, l = self.table_page(['LINE姓名','LINE User ID','備註','建立時間'])
+        bar = QHBoxLayout()
+        for label, fn in [('查看聊天訊息', self.show_messages), ('編輯本機姓名／備註', self.edit_client)]:
+            b = QPushButton(label); b.clicked.connect(fn); bar.addWidget(b)
+        l.insertLayout(0, bar)
+        self.clientt.cellDoubleClicked.connect(lambda *_: self.show_messages())
         return self.clientw
 
     def bookings_page(self):
-        self.bookw, self.bookt, _ = self.table_page(['日期','時間','賽事','隊伍/球員','需求','攝影師','預約','收款','交件'])
+        self.bookw, self.bookt, l = self.table_page(['日期','時間','賽事','隊伍/球員','需求','攝影師','預約','收款','交件'])
+        b = QPushButton('編輯選取案件／金額／交件'); b.clicked.connect(self.edit_booking); l.insertWidget(0,b)
+        self.bookt.cellDoubleClicked.connect(lambda *_: self.edit_booking())
         return self.bookw
 
     def payments_page(self):
@@ -398,7 +416,8 @@ class Main(QMainWindow):
             QMessageBox.critical(self, '匯入失敗', str(e))
 
     def authorize_google(self):
-        if self.auth_busy:
+        if self.auth_busy or self.sync_busy or self.payment_busy:
+            self.status.setText('請等目前同步完成後再授權。')
             return
         self.auth_busy = True
         self.auth_btn.setEnabled(False)
@@ -452,11 +471,12 @@ class Main(QMainWindow):
             self.sync_all(auto=True)
 
     def sync_all(self, auto=False):
-        if self.sync_busy:
+        if self.sync_busy or self.auth_busy or self.payment_busy:
             if not auto:
                 self.status.setText('同步已在進行中，不會重複啟動。')
             return
         self.sync_busy = True
+        self.sync_is_auto = auto
         self.sync_btn.setEnabled(False)
         self.status.setText('同步準備中…')
 
@@ -468,9 +488,12 @@ class Main(QMainWindow):
                 results.append(f'LINE {n} 筆')
             except Exception as e:
                 results.append('LINE 尚未連線：' + str(e))
-            progress('Google：正在搜尋預約表…')
-            g = self.sync_google_worker(progress)
-            results.append(f'Google {g[0]} 份表 / {g[1]} 筆預約')
+            try:
+                progress('Google：正在搜尋預約表…')
+                g = self.sync_google_worker(progress)
+                results.append(f'Google {g[0]} 份表 / {g[1]} 筆預約')
+            except Exception as e:
+                results.append('Google 未完成：' + str(e))
             return '；'.join(results)
 
         self.worker = TaskThread(job)
@@ -482,38 +505,61 @@ class Main(QMainWindow):
     def sync_done(self, msg):
         self.sync_busy = False; self.sync_btn.setEnabled(True)
         self.refresh_all()
-        self.status.setText('同步完成：' + str(msg))
+        self.status.setText('同步結果：' + str(msg))
 
     def sync_failed(self, err):
         self.sync_busy = False; self.sync_btn.setEnabled(True)
         self.refresh_all()
         self.status.setText('同步失敗：' + err)
-        QMessageBox.critical(self, '同步失敗', err + f'\n\n詳細紀錄：{LOG_FILE}')
+        if not getattr(self, 'sync_is_auto', False):
+            QMessageBox.critical(self, '同步失敗', err + f'\n\n詳細紀錄：{LOG_FILE}')
 
     def sync_line_worker(self):
         url = self.line_api_base()
         if not url:
-            return 0
+            raise RuntimeError('尚未設定 LINE 網址')
+        if not url.startswith('https://'):
+            raise RuntimeError('LINE 網址必須使用 https://')
         headers = {}
         if self.cfg.get('line_api_token'):
             headers['Authorization'] = 'Bearer ' + self.cfg['line_api_token']
-        r = requests.get(url + '/api/messages', headers=headers, timeout=20)
+        r = requests.get(url + '/api/messages', headers=headers, timeout=20, allow_redirects=False)
+        if 300 <= r.status_code < 400:
+            raise RuntimeError('LINE 網址發生轉址，請確認填的是 Worker 網址')
         r.raise_for_status()
-        data = r.json(); rows = data.get('messages', data if isinstance(data, list) else [])
+        data = r.json()
+        rows = data if isinstance(data, list) else data.get('messages') if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise RuntimeError('LINE 回傳格式不符，沒有 messages 清單')
         if not rows:
             return 0
         with DB_LOCK:
             c = conn(); cur = c.cursor()
             try:
+                added = 0
                 for x in rows:
-                    uid = str(x.get('userId') or x.get('line_user_id') or x.get('sourceUserId') or '')
+                    if not isinstance(x, dict): continue
+                    key = str(x.get('message_key') or x.get('id') or '')
+                    if x.get('revoked') in (1, True, '1'):
+                        old = cur.execute('SELECT id FROM messages WHERE source_key=?', (key,)).fetchone()
+                        if old:
+                            cur.execute("UPDATE payment_candidates SET status='已收回' WHERE message_id=? AND status='待確認'", (old['id'],))
+                            cur.execute("UPDATE messages SET body='[訊息已收回]',raw_json='{}' WHERE id=?", (old['id'],))
+                        continue
+                    uid = str(x.get('sender_id') or x.get('userId') or x.get('line_user_id') or x.get('sourceUserId') or '')
                     if not uid: continue
-                    name = x.get('displayName') or x.get('display_name') or uid[-8:]
-                    cur.execute('INSERT INTO customers(line_user_id,display_name) VALUES(?,?) ON CONFLICT(line_user_id) DO UPDATE SET display_name=excluded.display_name', (uid,name))
-                    body = str(x.get('text') or x.get('message') or x.get('body') or '')
-                    ts = str(x.get('timestamp') or x.get('created_at') or datetime.now().isoformat(timespec='seconds'))
-                    cur.execute('INSERT OR IGNORE INTO messages(line_user_id,body,created_at,raw_json) VALUES(?,?,?,?)', (uid,body,ts,json.dumps(x,ensure_ascii=False)))
+                    name = x.get('displayName') or x.get('display_name') or ''
+                    cur.execute("INSERT INTO customers(line_user_id,display_name) VALUES(?,?) ON CONFLICT(line_user_id) DO UPDATE SET display_name=CASE WHEN excluded.display_name!='' THEN excluded.display_name ELSE customers.display_name END", (uid,name))
+                    body = str(x.get('text_content') or x.get('text') or x.get('message') or x.get('body') or '')
+                    ts = str(x.get('sent_at') or x.get('timestamp') or x.get('created_at') or '')
+                    if not ts and not key: continue
+                    if ts.isdigit():
+                        n = int(ts); ts = datetime.fromtimestamp(n / 1000 if n > 100000000000 else n).isoformat(timespec='seconds')
+                    if not key:
+                        key = hashlib.sha256(json.dumps([uid,ts,body],ensure_ascii=False).encode()).hexdigest()
+                    cur.execute('INSERT OR IGNORE INTO messages(line_user_id,body,created_at,raw_json,source_key) VALUES(?,?,?,?,?)', (uid,body,ts,json.dumps(x,ensure_ascii=False),key))
                     if cur.rowcount:
+                        added += 1
                         mid = cur.lastrowid; amt, last5 = extract_payment(body)
                         if amt or last5:
                             match = self.auto_match_booking(cur, amt)
@@ -521,7 +567,7 @@ class Main(QMainWindow):
                 c.commit()
             finally:
                 c.close()
-        return len(rows)
+        return added
 
     def auto_match_booking(self, cur, amt):
         if not amt: return None
@@ -533,7 +579,11 @@ class Main(QMainWindow):
         if not drive or not sheets:
             raise RuntimeError('Google 尚未授權')
         q = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '預約'"
-        files = drive.files().list(q=q, fields='files(id,name,modifiedTime)', pageSize=1000, orderBy='modifiedTime desc').execute().get('files', [])
+        files = []; token = None
+        while True:
+            page = drive.files().list(q=q, fields='nextPageToken,files(id,name,modifiedTime)', pageSize=1000, orderBy='modifiedTime desc',pageToken=token).execute()
+            files.extend(page.get('files',[])); token=page.get('nextPageToken')
+            if not token: break
         total_rows = 0; changed_files = 0
         total = len(files)
 
@@ -552,14 +602,17 @@ class Main(QMainWindow):
 
             # 網路讀取時完全不持有 SQLite 交易鎖。
             meta = sheets.spreadsheets().get(spreadsheetId=sid, fields='sheets.properties(title,index)').execute()
-            tabs = sorted(meta.get('sheets', []), key=lambda x: x['properties'].get('index',0))
+            tabs = sorted(meta.get('sheets', []), key=lambda x: (0 if any(k in x['properties']['title'].lower() for k in ['表單回應','表單回覆','form responses']) else 1,x['properties'].get('index',0)))
             if not tabs:
                 continue
             tab = tabs[0]['properties']['title']
-            vals = sheets.spreadsheets().values().get(spreadsheetId=sid, range=f"'{tab}'!A1:AZ10000").execute().get('values', [])
+            vals = sheets.spreadsheets().values().get(spreadsheetId=sid, range=f"'{tab.replace(chr(39),chr(39)*2)}'!A:AZ").execute().get('values', [])
             if not vals:
                 continue
             headers = vals[0]
+            joined = ' '.join(map(str,headers))
+            if not any(k in joined for k in ['日期','時間戳記','Timestamp']) or not any(k in joined for k in ['隊伍','球員','拍攝需求']):
+                progress(f'略過非預約格式：{title}'); continue
             parsed = []
             for idx, row in enumerate(vals[1:], start=2):
                 if any(str(x).strip() for x in row):
@@ -570,6 +623,11 @@ class Main(QMainWindow):
                 c = conn(); cur = c.cursor()
                 try:
                     for x in parsed:
+                        legacy = cur.execute('SELECT id,source_key FROM bookings WHERE source=? AND source_key LIKE ?',('google_form',sid+':%')).fetchall()
+                        old = [b for b in legacy if ':v41:' not in b['source_key'] and b['source_key'].endswith(x['legacy_suffix'])]
+                        exists = cur.execute('SELECT id FROM bookings WHERE source_key=?',(x['source_key'],)).fetchone()
+                        if len(old)==1 and not exists:
+                            cur.execute('UPDATE bookings SET source_key=? WHERE id=?',(x['source_key'],old[0]['id']))
                         cur.execute('''INSERT INTO bookings(source,source_key,event_name,event_date,start_time,venue,age_group,team,opponent,player_text,request_raw,request_type,priority_numbers)
                           VALUES('google_form',?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(source_key) DO UPDATE SET
@@ -595,7 +653,70 @@ class Main(QMainWindow):
         it = self.payt.item(r, 0)
         return int(it.text()) if it and it.text().isdigit() else None
 
+    def show_messages(self):
+        row = self.clientt.currentRow()
+        if row < 0: return
+        uid = self.clientt.item(row,1).text()
+        c = conn()
+        try:
+            rows = c.execute('SELECT created_at,body FROM messages WHERE line_user_id=? ORDER BY created_at DESC', (uid,)).fetchall()
+        finally: c.close()
+        d = QDialog(self); d.setWindowTitle('LINE 聊天紀錄'); d.resize(900,600)
+        l = QVBoxLayout(d)
+        t = QTableWidget(0,2); t.setHorizontalHeaderLabels(['時間','訊息'])
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        l.addWidget(t); self.fill(t,rows); t.resizeRowsToContents(); d.exec()
+
+    def edit_client(self):
+        row = self.clientt.currentRow()
+        if row < 0: return
+        uid = self.clientt.item(row,1).text()
+        d = QDialog(self); d.setWindowTitle('本機客戶姓名與備註'); f = QFormLayout(d)
+        name = QLineEdit(self.clientt.item(row,0).text()); note = QLineEdit(self.clientt.item(row,2).text())
+        f.addRow('本機顯示姓名',name); f.addRow('本機備註',note)
+        f.addRow(QLabel('只儲存在這部電腦，不會修改 LINE 官方後台。'))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(d.accept); buttons.rejected.connect(d.reject); f.addRow(buttons)
+        if d.exec() != QDialog.DialogCode.Accepted: return
+        with DB_LOCK:
+            c = conn()
+            try:
+                c.execute('UPDATE customers SET custom_name=?,note=? WHERE line_user_id=?',(name.text().strip(),note.text(),uid)); c.commit()
+            finally: c.close()
+        self.refresh_all()
+
+    def edit_booking(self):
+        row = self.bookt.currentRow()
+        if row < 0: return
+        bid = self.bookt.item(row,0).data(Qt.ItemDataRole.UserRole)
+        c = conn()
+        try: b = c.execute('SELECT * FROM bookings WHERE id=?',(bid,)).fetchone()
+        finally: c.close()
+        if not b: return
+        d = QDialog(self); d.setWindowTitle('編輯案件'); f = QFormLayout(d)
+        fields = {}
+        for key,label in [('photographer','攝影師'),('booking_status','預約狀態'),('shoot_status','拍攝狀態'),('delivery_status','交件狀態')]:
+            e = QLineEdit(b[key] or ''); fields[key]=e; f.addRow(label,e)
+        amount = QSpinBox(); amount.setRange(0,10000000); amount.setValue(b['amount'] or 0); f.addRow('應收金額',amount)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(d.accept); buttons.rejected.connect(d.reject); f.addRow(buttons)
+        if d.exec() != QDialog.DialogCode.Accepted: return
+        with DB_LOCK:
+            c=conn()
+            try:
+                c.execute('UPDATE bookings SET photographer=?,booking_status=?,shoot_status=?,delivery_status=?,amount=? WHERE id=?',tuple(e.text() for e in fields.values())+(amount.value(),bid)); c.commit()
+            finally: c.close()
+        self.refresh_all()
+
+    def closeEvent(self,event):
+        if any(w is not None and w.isRunning() for w in (self.worker,self.auth_worker,self.payment_worker)):
+            self.status.setText('同步／授權尚未結束，完成後即可關閉。'); event.ignore(); return
+        event.accept()
+
     def confirm_payment(self):
+        if self.payment_busy or self.sync_busy or self.auth_busy:
+            self.status.setText('請等目前工作完成後再確認收款。'); return
         pid = self.selected_payment_id()
         if not pid:
             return QMessageBox.information(self, '請選擇', '請先點選一筆待確認收款。')
@@ -605,31 +726,60 @@ class Main(QMainWindow):
             try:
                 p = c.execute('SELECT * FROM payment_candidates WHERE id=?', (pid,)).fetchone()
                 if not p: return
+                if p['status'] != '待確認':
+                    return QMessageBox.warning(self,'不可重複入帳','這筆不是待確認狀態。若顯示需核對，請先檢查收支表，不要重送。')
                 bid = p['matched_booking_id']
-                if not bid:
-                    return QMessageBox.warning(self, '需要人工確認', '這筆金額無法唯一配對到一個未收款預約，暫時不自動寫入收支表，避免記錯帳。')
+                candidates = c.execute('SELECT * FROM bookings WHERE paid=0 ORDER BY event_date DESC').fetchall()
+                if not candidates:
+                    return QMessageBox.warning(self,'沒有案件','請先同步預約表，再編輯案件的應收金額。')
+                d = QDialog(self); d.setWindowTitle('確認收款對應案件'); f = QFormLayout(d)
+                combo = QComboBox()
+                for candidate in candidates:
+                    combo.addItem(f"{candidate['event_date']} {candidate['event_name']}｜{candidate['player_text'] or candidate['team']}｜應收 {candidate['amount']}",candidate['id'])
+                if bid and combo.findData(bid)>=0: combo.setCurrentIndex(combo.findData(bid))
+                else: combo.setCurrentIndex(-1)
+                f.addRow('案件',combo); f.addRow(QLabel(f"金額：{p['amount']}；末五碼：{p['last5'] or ''}\n請核對實際入款。本程式無法查詢銀行。"))
+                buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
+                buttons.accepted.connect(d.accept); buttons.rejected.connect(d.reject); f.addRow(buttons)
+                if d.exec()!=QDialog.DialogCode.Accepted or combo.currentIndex()<0: return
+                bid=combo.currentData()
                 b = c.execute('SELECT * FROM bookings WHERE id=?', (bid,)).fetchone()
+                if not p['amount'] or p['amount'] != b['amount']:
+                    return QMessageBox.warning(self,'金額需核對','此版只處理足額收款。請先核對案件應收金額與實際匯款金額。')
                 p_copy = dict(p); b_copy = dict(b)
             finally:
                 c.close()
 
-        try:
-            self.append_finance(b_copy, p_copy)
-        except Exception as e:
-            return QMessageBox.critical(self, '同步失敗', '沒有修改收款狀態。\n' + str(e))
-
         with DB_LOCK:
-            c = conn(); cur = c.cursor()
+            c=conn()
             try:
-                cur.execute('UPDATE bookings SET paid=1,last5=? WHERE id=?', (p_copy.get('last5'), bid))
-                cur.execute("UPDATE payment_candidates SET status='已確認' WHERE id=?", (pid,))
-                cur.execute("INSERT INTO audit_log(action,detail) VALUES('confirm_payment',?)", (f'payment={pid}, booking={bid}',))
-                c.commit()
-            finally:
-                c.close()
-        QMessageBox.information(self, '完成', '已確認收款，並同步寫入熱血少年收支表。')
-        self.refresh_all()
+                c.execute("UPDATE payment_candidates SET status='寫入中／需核對',matched_booking_id=? WHERE id=? AND status='待確認'",(bid,pid)); c.commit()
+            finally: c.close()
+        self.payment_busy=True
+        def job(progress):
+            progress('收款：正在寫入收支表…')
+            self.append_finance(b_copy,p_copy)
+            with DB_LOCK:
+                c=conn()
+                try:
+                    c.execute('UPDATE bookings SET paid=1,last5=? WHERE id=?',(p_copy.get('last5'),bid))
+                    c.execute("UPDATE payment_candidates SET status='已確認' WHERE id=?",(pid,))
+                    c.execute("INSERT INTO audit_log(action,detail) VALUES('confirm_payment',?)",(f'payment={pid}, booking={bid}',)); c.commit()
+                finally: c.close()
+            return True
+        self.payment_worker=TaskThread(job)
+        self.payment_worker.progress.connect(self.status.setText)
+        self.payment_worker.succeeded.connect(self.payment_done)
+        self.payment_worker.failed.connect(self.payment_failed)
+        self.payment_worker.start()
 
+    def payment_done(self,_):
+        self.payment_busy=False; self.refresh_all()
+        QMessageBox.information(self,'完成','已確認收款，並寫入收支表。')
+
+    def payment_failed(self,err):
+        self.payment_busy=False; self.refresh_all()
+        QMessageBox.warning(self,'需核對收支表','連線中斷或寫入失敗。為避免重複入帳，此筆已暫停重送；請核對收支表。\n'+err)
     def append_finance(self, b, p):
         _, sheets = google_services(False)
         if not sheets: raise RuntimeError('Google 尚未授權')
@@ -639,17 +789,18 @@ class Main(QMainWindow):
         sponsor = b.get('player_text') or p.get('display_name') or ''
         vals = [[b.get('event_name') or '', b.get('event_date') or '', team, sponsor, int(p.get('amount') or b.get('amount') or 0), p.get('last5') or '']]
         sheets.spreadsheets().values().append(
-            spreadsheetId=sid, range=f"'{tab}'!A:F", valueInputOption='USER_ENTERED',
+            spreadsheetId=sid, range=f"'{tab.replace(chr(39), chr(39)*2)}'!A:F", valueInputOption='RAW',
             insertDataOption='INSERT_ROWS', body={'values': vals}
         ).execute()
 
     def ignore_payment(self):
+        if self.payment_busy: return
         pid = self.selected_payment_id()
         if not pid: return
         with DB_LOCK:
             c = conn()
             try:
-                c.execute("UPDATE payment_candidates SET status='忽略' WHERE id=?", (pid,)); c.commit()
+                c.execute("UPDATE payment_candidates SET status='忽略' WHERE id=? AND status='待確認'", (pid,)); c.commit()
             finally:
                 c.close()
         self.refresh_all()
@@ -665,11 +816,11 @@ class Main(QMainWindow):
                         'undelivered': cur.execute("SELECT COUNT(*) FROM bookings WHERE delivery_status!='已交件'").fetchone()[0],
                         'messages': cur.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
                     }
-                    clients = cur.execute('SELECT display_name,line_user_id,note,created_at FROM customers ORDER BY id DESC LIMIT 500').fetchall()
+                    clients = cur.execute("SELECT COALESCE(NULLIF(custom_name,''),NULLIF(display_name,''),'尚未取得名稱'),line_user_id,note,created_at FROM customers ORDER BY id DESC LIMIT 500").fetchall()
                     bookings = cur.execute("""SELECT event_date,start_time,event_name,COALESCE(NULLIF(player_text,''),team),
                       request_type||CASE WHEN priority_numbers!='' THEN ' #'||priority_numbers ELSE '' END,
                       photographer,booking_status,CASE WHEN paid=1 THEN '已收' ELSE '未收' END,delivery_status
-                      FROM bookings ORDER BY event_date,start_time""").fetchall()
+                      ,id FROM bookings ORDER BY event_date,start_time""").fetchall()
                     pays = cur.execute("""SELECT p.id,p.display_name,p.amount,p.last5,
                       CASE WHEN p.matched_booking_id IS NULL THEN '未唯一配對' ELSE
                       (SELECT event_name||' / '||COALESCE(NULLIF(player_text,''),team) FROM bookings b WHERE b.id=p.matched_booking_id) END,
@@ -678,7 +829,8 @@ class Main(QMainWindow):
                     c.close()
             for k, v in vals.items():
                 self.cards[k].v.setText(f'NT$ {v:,}' if k == 'unpaid' else str(v))
-            self.fill(self.clientt, clients); self.fill(self.bookt, bookings); self.fill(self.payt, pays)
+            self.fill(self.clientt, clients); self.fill(self.bookt, [tuple(b)[:-1] for b in bookings]); self.fill(self.payt, pays)
+            for i,b in enumerate(bookings): self.bookt.item(i,0).setData(Qt.ItemDataRole.UserRole,b['id'])
         except sqlite3.OperationalError as e:
             log('refresh_all sqlite error: ' + str(e))
             self.status.setText('資料庫忙碌，稍後會自動重試。')
@@ -692,6 +844,14 @@ class Main(QMainWindow):
 
 
 if __name__ == '__main__':
+    if '--self-test' in sys.argv:
+        import unittest
+        from test_pro import CoreTests
+        import io
+        result=unittest.TextTestRunner(stream=sys.stderr or io.StringIO(),verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(CoreTests))
+        if '--test-report' in sys.argv:
+            Path(sys.argv[sys.argv.index('--test-report')+1]).write_text(json.dumps({'version':'4.1','ok':result.wasSuccessful(),'tests':result.testsRun,'failures':len(result.failures),'errors':len(result.errors),'live_services_tested':False}),encoding='utf-8')
+        sys.exit(0 if result.wasSuccessful() else 1)
     init_db()
     app = QApplication(sys.argv); app.setStyleSheet(STYLE)
     m = Main(); m.show(); sys.exit(app.exec())
