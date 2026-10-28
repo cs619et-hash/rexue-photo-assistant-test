@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f"><meta name="description" content="熱血少年｜攝影師拍攝與交件工作管理中心">
+  <title>熱血少年｜拍攝工作管理</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-symbol">R<span class="brand-dot"></span></div><div><strong>熱血少年</strong><small>PHOTO WORKSPACE</small></div></div>
+      <div class="side-label">工作區</div>
+      <button class="side-link active" data-go="home"><span>▦</span> 工作總覽</button>
+      <button class="side-link" data-go="calendar"><span>▦</span> 拍攝月曆</button>
+      <button class="side-link" data-go="settings"><span>⚙</span> 團隊設定</button>
+      <div class="sidebar-foot"><span class="live-mark"></span> REXUE / FIELD SYSTEM <span class="version">V5 BETA</span></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-title"><span class="eyebrow">REXUE / WORKSPACE</span><b>拍攝工作管理</b></div>
+        <div class="top-right"><span class="cloud-pill" id="cloudIndicator">● 尚未啟用雲端</span><span id="whoName" class="who-name">尚未登入</span><button class="ghost-button" id="loginTop">登入</button></div>
+      </header>
+      <main>
+        <section class="page" id="homePage">
+          <div class="hero"><div class="hero-copy"><div class="hero-kicker"><i></i> FIELD OPERATIONS / 2026</div><h1>拍攝的事，<br><em>一眼掌握。</em></h1><p>下一場在哪？哪些已經拍完？還有哪幾場沒交件？</p><div class="hero-foot"><span id="todayLabel">日期讀取中</span><span class="hero-separator"></span><span id="heroNext">你的拍攝工作台</span></div></div><div class="lens" aria-hidden="true"><div class="lens-middle"><div class="lens-inner"><span>RX</span></div></div><small>CAPTURE / DELIVER</small></div></div>
+          <div class="summary" id="summaryCards"></div>
+          <div class="notice-area" id="statusNotice" role="status"></div>
+          <section class="work-panel">
+            <div class="section-head"><div><div class="eyebrow">TODAY'S PRIORITY</div><h2>我的工作清單 <span id="visibleCount" class="count"></span></h2></div><button id="newJob" class="action-button">＋ 新增拍攝</button></div>
+            <div class="controls"><div class="tabs" role="tablist" id="tabs"><button data-tab="pending" class="active" role="tab" aria-selected="true">已拍待交 <span id="pendingCount">0</span></button><button data-tab="upcoming" role="tab" aria-selected="false">接下來拍攝 <span id="upcomingCount">0</span></button><button data-tab="done" role="tab" aria-selected="false">已完成 <span id="doneCount">0</span></button><button data-tab="review" role="tab" aria-selected="false">待核對 <span id="reviewCount">0</span></button></div><div class="tools"><div class="people" id="peopleToggle"><button data-person="all" class="active">全部</button><button data-person="zhixian">植先</button><button data-person="zhicheng">植丞</button></div><input id="search" aria-label="搜尋比賽" type="search" placeholder="搜尋比賽／隊伍／日期…"></div></div>
+            <div id="jobList" class="job-list"></div>
+          </section>
+        </section>
+        <section id="calendarPage" class="page hidden"><div class="simple-hero"><div class="eyebrow">SCHEDULE VIEW</div><h1>拍攝月曆</h1><p>依拍攝日期排列。不顯示時分，只看日期與球賽。</p></div><div class="calendar-panel"><div class="calendar-bar"><button id="prevMonth">←</button><b id="monthText">2026 / 10</b><button id="nextMonth">→</button><button id="thisMonth">本月</button></div><div id="calendarGrid" class="calendar-grid"></div></div></section>
+        <section id="settingsPage" class="page hidden"><div class="simple-hero"><div class="eyebrow">TEAM & CLOUD</div><h1>團隊設定</h1><p>兩位攝影師獨立管理拍攝、共享同一份賽事清單。</p></div><div class="settings-grid"><div class="setting-card"><h2>帳號與雲端</h2><p id="accountDetail">目前尚未連線。</p><div class="settings-actions"><button id="googleLogin" class="action-button">使用 Google 登入</button><button id="logout" class="secondary-button">登出</button></div></div><div class="setting-card"><h2>團隊協作</h2><p>第一位攝影師建立團隊後，可以邀請第二位加入；加入前需經管理員核准。</p><div id="teamControl"></div></div><div class="setting-card full"><h2>資料備份／轉移</h2><p>可下載目前雲端拍攝紀錄的 JSON 備份；舊版 V4.2 匯出的 JSON 也可以在這裡匯入，不會直接覆蓋同 ID 的資料。</p><div class="settings-actions"><button class="secondary-button" id="exportButton">下載 JSON 備份</button><label class="secondary-button file-button">匯入 JSON <input id="importFile" type="file" accept=".json,application/json" hidden></label></div></div></div></section>
+        <footer class="foot">你負責在場上拚，我負責把努力留下來。 <span>REXUE STUDIO</span></footer>
+      </main>
+    </div>
+  </div>
+  <nav class="bottom-nav" aria-label="手機導覽"><button data-go="home" class="active">▦<span>工作</span></button><button data-go="calendar">▦<span>月曆</span></button><button id="bottomAdd">＋<span>新增</span></button><button data-go="settings">⚙<span>設定</span></button></nav>
+  <dialog id="jobDialog" class="modal"><form id="jobForm" method="dialog"><div class="modal-top"><div><small>SHOOTING RECORD</small><h2 id="dialogTitle">新增拍攝</h2></div><button type="button" class="x-button" data-close="jobDialog" aria-label="關閉">✕</button></div><div class="modal-body"><label>比賽名稱 <em>*</em><input id="jobTitle" maxlength="140" required placeholder="例：2026 全國學童盃"></label><div class="two"><label>拍攝日期 <em>*</em><input id="shootDate" type="date" required></label><label>拍攝地點<input id="jobLocation" maxlength="100" placeholder="例：鳳山體育場"></label></div><label>球隊／客戶<input id="jobTeam" maxlength="100" placeholder="可留空"></label><div class="person-assign"><strong>這場誰拍？</strong><div class="two"><label><input id="assignXian" type="checkbox" checked> 植先</label><label><input id="assignCheng" type="checkbox"> 植丞</label></div></div><div class="two"><label>交件日（可修改）<input id="dueDate" type="date" required></label><label class="checkline"><input type="checkbox" id="dueConfirmed"> 這是正式交件期限</label></div><p class="helper">預設交件日期為拍攝後 14 天；未確認的期限只顯示「預估」，不會標成正式逾期。</p></div><div class="modal-actions"><button type="button" id="deleteJob" class="secondary-button hidden" style="color:#b93c4d;margin-right:auto">刪除這場</button><button type="button" class="secondary-button" data-close="jobDialog">取消</button><button type="submit" class="action-button">儲存拍攝工作</button></div></form></dialog>
+  <dialog id="confirmation" class="modal tiny"><div class="modal-top"><h2 id="confirmTitle">請確認操作</h2><button type="button" class="x-button" data-close="confirmation">✕</button></div><p id="confirmDescription"></p><div class="modal-actions"><button class="secondary-button" id="confirmNo">取消</button><button class="action-button" id="confirmYes">確認</button></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./firebase-config.js"></script><script type="module" src="./app.js"></script>
+</body>
+</html>
