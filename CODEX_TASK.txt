@@ -1,0 +1,18 @@
+請繼續開發「熱血少年｜拍攝工作管理系統」。
+
+請先完整閱讀同資料夾的「交給_Codex_請先閱讀.md」，然後以「01_最新V5_免費雲端網頁版」為唯一新版本主線，參考「02_舊版V4_2_本機程式參考」保留功能與資料匯入相容性。
+
+目標：不下載 ZIP、固定網址更新；Firebase Spark 免費方案，Google 登入，Cloud Firestore 安全規則限制植先與植丞團隊成員，兩位跨裝置即時同步拍攝及交件進度。嚴禁升級 Blaze 或產生費用。
+
+請先檢查既有網站與資料來源：https://rexue-photo-workspace-free.onrender.com
+原始 GitHub 分支：https://github.com/cs619et-hash/rexue-photo-assistant-test/tree/rexue-workspace-firebase-free
+
+優先順序：
+(1) 確認 Firebase Spark 專案、Google Authentication、Cloud Firestore 和安全 rules；不要把測試模式當正式資料庫。
+(2) 填入 Web App Firebase 公開設定，測試兩位獨立 Google 帳號登入、申請加入和管理員核准。
+(3) 在兩部裝置驗證共用賽事但分開標記拍攝完成與交件完成。改版不得清空工作資料。
+(4) 安全匯入 2026/09/01 起的 Google Calendar 行程及既有 V4.2 JSON/SQLite 轉換資料，處理重複、取消與日期變更；在匯入前備份舊紀錄。
+(5) 介面持續優化：深色帥氣首頁、三大清單、工作優先順序、日期不顯示時間、交件倒數、搜尋、雙攝影師與手機版，操作不要繁複。
+(6) 部署到同一免費固定網址，確保使用者重新整理網頁可見新版。
+
+請避免只給操作教學或概念建議，直接修正程式、執行測試、確認網頁部署狀態，並明確回報哪些完成／尚未完成。不要索取 Google 私鑰或要求用戶重覆提供既有資料；若有帳號授權限制，精確指出還差哪個步驟。絕不刪除既有拍攝紀錄。
