@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function teamPath(teamId) { return /databases/$(database)/documents/teams/$(teamId); }
+    function owner(teamId) {
+      return signedIn()
+        && exists(teamPath(teamId))
+        && get(teamPath(teamId)).data.ownerUid == request.auth.uid;
+    }
+    function member(teamId) {
+      return signedIn() && (owner(teamId) ||
+        exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)));
+    }
+    match /profiles/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['teamId', 'displayName'])
+        && request.resource.data.teamId is string && request.resource.data.teamId.size() <= 80;
+    }
+    match /teams/{teamId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name','ownerUid','createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() <= 120;
+      allow get, list: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid
+            || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)));
+      allow update, delete: if false;
+      match /members/{uid} {
+        allow get: if owner(teamId) || (signedIn() && request.auth.uid == uid);
+        allow list: if owner(teamId);
+        allow create, update: if owner(teamId)
+          && request.resource.data.uid == uid
+          && request.resource.data.keys().hasOnly(['uid','name','email','approvedAt']);
+        allow delete: if owner(teamId);
+      }
+      match /requests/{uid} {
+        allow create: if signedIn()
+          && request.auth.uid == uid && exists(teamPath(teamId))
+          && request.resource.data.uid == uid
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.keys().hasOnly(['uid','email','name','createdAt']);
+        allow get: if owner(teamId) || (signedIn() && request.auth.uid == uid);
+        allow list, delete: if owner(teamId);
+        allow update: if false;
+      }
+      match /jobs/{jobId} {
+        allow get, list: if member(teamId);
+        allow create, update: if member(teamId)
+          && request.resource.data.keys().hasOnly(['title','shootDate','location','team','assignments','createdAt','updatedAt'])
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 140
+          && request.resource.data.shootDate is string
+          && request.resource.data.shootDate.size() == 10
+          && request.resource.data.assignments is map
+          && request.resource.data.assignments.keys().hasOnly(['zhixian','zhicheng'])
+          && request.resource.data.assignments.size() > 0;
+        allow delete: if member(teamId);
+      }
+    }
+  }
+}
