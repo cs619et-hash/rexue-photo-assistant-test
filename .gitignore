@@ -1,0 +1,22 @@
+# 私密資料、憑證、個人行程、資料庫，絕對不要推到公開程式庫
+.env
+.env.*
+!.env.example
+.firebaserc
+firebase-debug.log
+firebase-debug.*.log
+node_modules/
+.cache/
+.DS_Store
+__pycache__/
+*.pyc
+*.sqlite
+*.sqlite3
+*.db
+**/data/
+**/private*/
+**/calendar_snapshot.json
+**/*secret*.json
+**/service-account*.json
+**/credentials*.json
+**/*token*.json
